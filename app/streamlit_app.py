@@ -8,19 +8,14 @@ from rdkit import Chem
 from rdkit.Chem import Draw
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from chemgen import MODEL_DIR  # noqa: E402
+from common import load_pipeline, model_stamp  # noqa: E402
 from chemgen.nlu import parse_request  # noqa: E402
-from chemgen.pipeline import DesignPipeline, DesignTargets  # noqa: E402
+from chemgen.pipeline import DesignTargets  # noqa: E402
 
 st.set_page_config(page_title="ChemGen", layout="wide")
 
 EXAMPLE = ("An easy to make, water soluble, drug-like molecule with logP around 2.5. "
            "Show me 10 molecules.")
-
-
-@st.cache_resource
-def load_pipeline() -> DesignPipeline:
-    return DesignPipeline(MODEL_DIR)
 
 
 st.title("ChemGen: drug-like molecule design")
@@ -29,7 +24,7 @@ st.caption("Describe what you need. A property-conditioned SMILES generator prop
            "desirability score rank them; each result comes with a one-step synthesis recipe.")
 
 try:
-    pipeline = load_pipeline()
+    pipeline = load_pipeline(model_stamp())
 except FileNotFoundError:
     st.error("Trained models not found. Run `python -m chemgen download`, "
              "`python -m chemgen train-predictors` and `python -m chemgen train-generator` first.")

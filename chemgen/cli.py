@@ -64,6 +64,70 @@ def _lookup(args) -> None:
               f"logP {row['logP']:.2f}  QED {row['qed']:.2f}  SAS {row['SAS']:.2f}")
 
 
+def _apply(args) -> None:
+    from .apply import ModelBundle, analyze
+    from .harvest import HttpClient, Refused, candidates
+    bundle = ModelBundle.load()
+    if args.smiles:
+        smiles_list = [args.smiles]
+    else:
+        kind, value = ("formula", args.formula) if args.formula else ("name", args.name)
+        try:
+            records = candidates(kind, value, limit=args.max,
+                                 client=HttpClient(cache_dir=Path(args.data_dir) / "cache"))
+        except Refused as err:
+            print(err)
+            return
+        except ValueError as err:
+            raise SystemExit(str(err))
+        print(f"PubChem {kind} '{value}': {len(records)} structure(s) found")
+        smiles_list = [r.smiles for r in records[:args.max]]
+    reports = [analyze(s, bundle, scale_mmol=args.scale).to_markdown() for s in smiles_list]
+    text = "\n\n---\n\n".join(reports)
+    if args.out:
+        Path(args.out).write_text(text)
+        print(f"saved {len(reports)} report(s) to {args.out}")
+    else:
+        print(text)
+
+
+def _automate(args) -> None:
+    from .automation import CycleConfig, run_cycle, run_forever
+    cfg = CycleConfig(sources=tuple(args.sources), harvest_budget=args.harvest_budget, min_new=args.min_new,
+                      n_mols=args.n_mols, epochs=args.epochs, eval_n=args.eval_n, min_gain=args.min_gain,
+                      seed=args.seed, skip_harvest=args.skip_harvest, force=args.force,
+                      promote=not args.no_promote, data_dir=Path(args.data_dir))
+    if args.loop:
+        print(f"running a cycle every {args.interval_hours:g} h; stop with Ctrl-C")
+        run_forever(cfg, args.interval_hours)
+    else:
+        run_cycle(cfg)
+
+
+def _rollback(args) -> None:
+    from .automation import Registry
+    try:
+        print(f"live model is now {Registry(MODEL_DIR).rollback()}")
+    except RuntimeError as err:
+        raise SystemExit(str(err))
+
+
+def _status(args) -> None:
+    from .prepare import is_ready, render, run_checks
+    checks = run_checks(Path(args.data_dir), MODEL_DIR)
+    print(render(checks))
+    if not is_ready(checks):
+        raise SystemExit(1)
+
+
+def _prepare(args) -> None:
+    from .prepare import is_ready, prepare, render, run_checks
+    done = prepare(quick=args.quick, harvest_budget=args.harvest, data_dir=Path(args.data_dir),
+                   model_dir=MODEL_DIR)
+    print(f"\nsteps run: {', '.join(done) or 'none (already prepared)'}\n")
+    print(render(run_checks(Path(args.data_dir), MODEL_DIR)))
+
+
 def _design(args) -> None:
     import pandas as pd
     from .pipeline import DesignPipeline, DesignTargets
@@ -141,6 +205,47 @@ def main() -> None:
     p.add_argument("--threshold", type=int, default=90, help="similarity threshold (percent)")
     p.add_argument("--data-dir", default=str(DATA_DIR))
     p.set_defaults(func=_lookup)
+
+    p = sub.add_parser("apply", help="analyse a structure, formula or name: screen, predict, how to prepare it")
+    group = p.add_mutually_exclusive_group(required=True)
+    group.add_argument("--smiles", help="a structure, e.g. CC(=O)Nc1ccc(O)cc1")
+    group.add_argument("--formula", help="a molecular formula, e.g. C9H8O4 (looks isomers up on PubChem)")
+    group.add_argument("--name", help="a compound name, e.g. ibuprofen (looked up on PubChem)")
+    p.add_argument("--max", type=int, default=5, help="most structures to analyse for a formula or name")
+    p.add_argument("--scale", type=float, default=1.0, help="reaction scale in mmol for the recipe")
+    p.add_argument("--out", help="write the report(s) to this Markdown file")
+    p.add_argument("--data-dir", default=str(DATA_DIR))
+    p.set_defaults(func=_apply)
+
+    p = sub.add_parser("automate", help="harvest -> retrain -> benchmark -> promote if better")
+    p.add_argument("--sources", nargs="+", default=["pubchem", "chembl"])
+    p.add_argument("--harvest-budget", type=int, default=5000, help="new molecules to accept per source")
+    p.add_argument("--min-new", type=int, default=500, help="retrain only if this many new molecules arrived")
+    p.add_argument("--n-mols", type=int, default=60_000)
+    p.add_argument("--epochs", type=int, default=10)
+    p.add_argument("--eval-n", type=int, default=400, help="samples per benchmark condition")
+    p.add_argument("--min-gain", type=float, default=0.005, help="useful-yield gain needed to promote")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--skip-harvest", action="store_true")
+    p.add_argument("--force", action="store_true", help="retrain even if little new data arrived")
+    p.add_argument("--no-promote", action="store_true", help="evaluate only; never replace the live model")
+    p.add_argument("--loop", action="store_true", help="repeat forever instead of running once")
+    p.add_argument("--interval-hours", type=float, default=168.0)
+    p.add_argument("--data-dir", default=str(DATA_DIR))
+    p.set_defaults(func=_automate)
+
+    p = sub.add_parser("rollback", help="restore the previously live generator")
+    p.set_defaults(func=_rollback)
+
+    p = sub.add_parser("status", help="check that everything the app needs is installed and trained")
+    p.add_argument("--data-dir", default=str(DATA_DIR))
+    p.set_defaults(func=_status)
+
+    p = sub.add_parser("prepare", help="download, train and (optionally) harvest whatever is missing")
+    p.add_argument("--quick", action="store_true", help="smaller generator (about 10 minutes)")
+    p.add_argument("--harvest", type=int, default=0, metavar="N", help="also harvest N molecules per source")
+    p.add_argument("--data-dir", default=str(DATA_DIR))
+    p.set_defaults(func=_prepare)
 
     p = sub.add_parser("design", help="generate and rank molecules for target properties")
     p.add_argument("--logp", type=float, default=2.5, help="target logP")

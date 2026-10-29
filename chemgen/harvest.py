@@ -36,7 +36,6 @@ from pathlib import Path
 from typing import Callable, Iterator
 
 from rdkit import Chem
-from rdkit.Chem.MolStandardize import rdMolStandardize
 
 from . import chem, safety
 from .guard import REFUSAL, is_blocked
@@ -213,14 +212,11 @@ def _reason_key(reason: str) -> str:
 class Curator:
     """Standardise a raw record and apply the design pipeline's safety screens."""
 
-    def __init__(self):
-        self._largest = rdMolStandardize.LargestFragmentChooser()
-
     def curate(self, smiles: str) -> tuple[dict | None, str]:
         mol = chem.to_mol(smiles)
         if mol is None:
             return None, "unparseable"
-        mol = chem.neutralize(self._largest.choose(mol))
+        mol = chem.standardize(mol)
         canonical = Chem.MolToSmiles(mol)
         try:
             if len(tokenize(canonical)) > MAX_TOKENS:
@@ -339,9 +335,9 @@ class LookupResult:
     rejected: Counter
 
 
-def lookup(kind: str, value: str, limit: int = 25, threshold: int = 90,
-           client: HttpClient | None = None) -> LookupResult:
-    """Look one query up on PubChem and return only structures that pass the screens."""
+def candidates(kind: str, value: str, limit: int = 25, threshold: int = 90,
+               client: HttpClient | None = None) -> list[RawRecord]:
+    """Raw PubChem records for a formula, name or similar-structure query (screened queries only)."""
     value = value.strip()
     if kind == "formula":
         if not FORMULA.match(value):
@@ -355,11 +351,16 @@ def lookup(kind: str, value: str, limit: int = 25, threshold: int = 90,
         if safety.hazard_flags(query):
             raise Refused(REFUSAL)
     source = PubChemSource(client or HttpClient(cache_dir=None))
-    records = {"formula": lambda: source.by_formula(value, limit),
-               "name": lambda: source.by_name(value),
-               "similar": lambda: source.similar_to(value, threshold, limit)}[kind]()
+    return list({"formula": lambda: source.by_formula(value, limit),
+                 "name": lambda: source.by_name(value),
+                 "similar": lambda: source.similar_to(value, threshold, limit)}[kind]())
+
+
+def lookup(kind: str, value: str, limit: int = 25, threshold: int = 90,
+           client: HttpClient | None = None) -> LookupResult:
+    """Look one query up on PubChem and return only structures that pass the screens."""
     curator, accepted, rejected = Curator(), [], Counter()
-    for record in records:
+    for record in candidates(kind, value, limit, threshold, client):
         row, reason = curator.curate(record.smiles)
         if row is None:
             rejected[reason] += 1

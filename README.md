@@ -27,15 +27,37 @@ target properties
  one-step retrosynthesis (6 reaction classes)  -->  detailed recipe  -->  UI / CSV / Markdown
 ```
 
-## Quick start
+## How to prepare the app
+
+You need Python 3.10+, about 2 GB of free disk space, and internet access for the one-time
+data download. Nothing else: no GPU, no accounts, no API keys.
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
+python -m chemgen status                   # what is installed / downloaded / trained, and what to run next
+python -m chemgen prepare                  # runs every missing step (about 40 min on 4 CPU cores)
+python -m chemgen prepare --quick          # smaller generator, about 10 min, for a first look
+python -m chemgen prepare --harvest 5000   # also pull 5000 molecules per source before training
+
+streamlit run app/streamlit_app.py         # then open the Design, Apply a formula and Automation pages
+```
+
+`prepare` is idempotent: it downloads ZINC250k, ESOL and Lipophilicity, trains the two
+property predictors (about 2 min), and trains the generator (about 35 min), skipping anything
+already done. `status` exits non-zero when something is missing, so it can gate a deployment.
+The same steps are available one at a time:
+
+```bash
 python -m chemgen download                 # ZINC250k, ESOL, Lipophilicity (open data)
 python -m chemgen train-predictors         # ~2 min on CPU
 python -m chemgen train-generator          # ~35 min on 4 CPU cores (60k molecules, 10 epochs)
+```
+
+## Quick start
+
+```bash
 
 python -m chemgen design --logp 2.5 --qed 0.8 --sas 3 --min-logs -4 --n 2000 --top 20 --out hits.csv
 
@@ -69,6 +91,56 @@ with equivalents and amounts computed for a 1 mmol scale, solvent, temperature a
 numbered procedure and work-up steps, purification, the expected [M+H]+, hazards, and
 warnings (competing functional groups, stereochemistry). Molecules that none of the
 templates can split (roughly 4 in 10 in a 50-molecule test) are shown without a recipe.
+
+### Apply a formula
+
+Give the app something you already have and it applies the trained models to it:
+
+```bash
+python -m chemgen apply --smiles "CC(=O)Nc1ccc(O)cc1"
+python -m chemgen apply --formula C9H8O4 --max 3     # looks isomers up on PubChem, analyses each
+python -m chemgen apply --name ibuprofen --scale 2 --out report.md
+```
+
+Each report has the computed properties, ML predictions of solubility and logD with an
+uncertainty, an applicability check (Tanimoto similarity to the property models' training
+data, so you can see when a prediction is an extrapolation), and the preparation recipe.
+Three tiers apply. Structures matching the hazard screen are **refused** with no output.
+Structures that cannot be handled (unparseable; elements outside C N O S F Cl Br I) are
+reported as **unsupported**. Everything else gets predictions; the recipe is **withheld** if the
+structure carries NIH reactive or toxic alerts, and a structure with no one-step route says
+that it needs a multi-step synthesis. The same function is on the **Apply a formula** page.
+
+### Automation: the app improves itself
+
+```bash
+python -m chemgen automate                      # one cycle
+python -m chemgen automate --loop --interval-hours 168
+python -m chemgen rollback                      # undo the last promotion
+```
+
+One cycle: (1) the harvesting agents pull new molecules; (2) a gate skips retraining unless at
+least `--min-new` (500) new molecules arrived since the last training; (3) a candidate generator
+is trained on ZINC plus everything harvested; (4) the candidate and the live model are sampled on
+the same four property conditions, with the same seed and the same novelty reference; (5) the
+candidate is **promoted only if its useful-molecule yield is higher by `--min-gain` (0.5
+points) and its validity has not dropped by more than 2 points**; (6) the full record is
+appended to `models/automation_log.jsonl`. A "useful" molecule is valid, a first occurrence, not
+in either training set, passes every safety screen, and lands near the requested logP, QED and SA
+score. Superseded models are archived under `models/registry/`, each live model records its
+`previous_version`, and `rollback` walks back one version at a time. A network failure during
+harvesting does not stop the cycle; a training failure leaves the live model untouched. The
+**Automation** page shows readiness, the live model's metrics, the history, and can start a
+cycle in the background; the app reloads the generator by itself when a new one is promoted.
+
+To run it on a schedule, for example every Sunday at 03:00:
+
+```
+0 3 * * 0 cd /path/to/Chemistry-compounds && .venv/bin/python -m chemgen automate >> models/automation.out 2>&1
+```
+
+The property predictors are not retrained automatically: they learn from small labelled
+datasets (ESOL, Lipophilicity) that do not grow by harvesting, so only the generator improves.
 
 ### Data-harvesting agents
 
@@ -118,9 +190,14 @@ generator's own predictions and recipes carry the same caveats as everything els
 | `chemgen/pipeline.py` | The sampling, filtering, scoring and ranking loop. |
 | `chemgen/nlu.py` | English request parser. |
 | `chemgen/guard.py` | The request-level refusal screen shared by the English parser and the web agents. |
+| `chemgen/apply.py` | Screens a user-supplied structure, predicts its properties with an applicability check, and attaches the recipe. |
+| `chemgen/automation.py` | The harvest -> retrain -> benchmark -> promote loop, the versioned model registry and rollback. |
+| `chemgen/prepare.py` | `status` readiness checks and the idempotent `prepare` command. |
 | `chemgen/harvest.py` | Data-harvesting agents: PubChem and ChEMBL sources, curator, store, coordinator, `lookup`. |
 | `chemgen/synthesis.py` | Template retrosynthesis, route ranking and recipe writer. |
-| `app/streamlit_app.py` | Web UI: English or slider input, molecule grid, metrics, table, per-molecule recipes, downloads. |
+| `app/streamlit_app.py` | Design page: English or slider input, molecule grid, metrics, table, per-molecule recipes, downloads. |
+| `app/pages/1_Apply_a_formula.py` | Analyse a SMILES, formula or name: predictions, applicability, recipe. |
+| `app/pages/2_Automation.py` | Readiness checklist, live model, run history, start a cycle, cron line. |
 
 ## Safety filters
 

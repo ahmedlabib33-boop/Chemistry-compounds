@@ -16,6 +16,7 @@ RDLogger.DisableLog("rdApp.*")
 
 _MORGAN = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
 _UNCHARGER = rdMolStandardize.Uncharger()
+_LARGEST_FRAGMENT = rdMolStandardize.LargestFragmentChooser()
 
 
 def to_mol(smiles: str | None) -> Chem.Mol | None:
@@ -30,6 +31,11 @@ def canonical(smiles: str | None) -> str | None:
 def neutralize(mol: Chem.Mol) -> Chem.Mol:
     """Strip removable charges (e.g. [NH3+] -> NH2); nitro-type zwitterions are kept."""
     return _UNCHARGER.uncharge(mol)
+
+
+def standardize(mol: Chem.Mol) -> Chem.Mol:
+    """Largest fragment (drops salts and solvents), then neutralised."""
+    return neutralize(_LARGEST_FRAGMENT.choose(mol))
 
 
 def sa_score(mol: Chem.Mol) -> float:

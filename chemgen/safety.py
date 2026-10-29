@@ -34,6 +34,7 @@ HAZARD_PATTERNS = {
     "azide": "N=[N+]=[N-]",
     "peroxide": "[OX2][OX2]",
     "N-nitroso": "N-N=O",
+    "nitrogen / sulfur mustard": "[N,S](-[CH2][CH2][Cl,Br,I])-[CH2][CH2][Cl,Br,I]",
 }
 _HAZARD_MOLS = {name: Chem.MolFromSmarts(s) for name, s in HAZARD_PATTERNS.items()}
 
@@ -71,6 +72,18 @@ def _soft_catalog() -> FilterCatalog:
     params = FilterCatalogParams()
     params.AddCatalog(FilterCatalogParams.FilterCatalogs.BRENK)
     return FilterCatalog(params)
+
+
+@lru_cache(maxsize=2)
+def _single_catalog(kind: str) -> FilterCatalog:
+    params = FilterCatalogParams()
+    params.AddCatalog(getattr(FilterCatalogParams.FilterCatalogs, kind))
+    return FilterCatalog(params)
+
+
+def nih_alerts(mol: Chem.Mol) -> list[str]:
+    """NIH reactive / toxic structural alerts only (PAINS excluded)."""
+    return [m.GetDescription() for m in _single_catalog("NIH").GetMatches(mol)]
 
 
 def _lipinski_violations(mol: Chem.Mol) -> int:
