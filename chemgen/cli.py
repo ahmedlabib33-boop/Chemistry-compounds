@@ -37,9 +37,22 @@ def _train_generator(args) -> None:
 def _design(args) -> None:
     import pandas as pd
     from .pipeline import DesignPipeline, DesignTargets
-    pipeline = DesignPipeline(MODEL_DIR)
+    top_k = args.top
     targets = DesignTargets(logp=args.logp, qed=args.qed, sas=args.sas, min_logs=args.min_logs)
-    result = pipeline.design(targets, n_samples=args.n, top_k=args.top,
+    if args.english:
+        from .nlu import parse_request
+        request = parse_request(args.english)
+        if request.refusal:
+            print(request.refusal)
+            return
+        targets, top_k = request.targets, request.top_k or top_k
+        print("Understood:")
+        for line in request.interpretation:
+            print(f"  - {line}")
+        for line in request.unsupported:
+            print(f"  ! not modelled: {line}")
+    pipeline = DesignPipeline(MODEL_DIR)
+    result = pipeline.design(targets, n_samples=args.n, top_k=top_k,
                              temperature=args.temperature, seed=args.seed)
     print(" -> ".join(f"{k} {v}" for k, v in result.stats.items()))
     if result.table.empty:
@@ -51,6 +64,13 @@ def _design(args) -> None:
     if args.out:
         result.table.to_csv(args.out, index=False)
         print(f"saved {args.out}")
+    if args.recipes_out:
+        Path(args.recipes_out).write_text(result.recipes_markdown())
+        print(f"saved synthesis recipes to {args.recipes_out}")
+    for smiles in list(result.table["SMILES"])[:args.recipes]:
+        recipe = result.recipes.get(smiles)
+        print(f"\n{'=' * 78}\n{smiles}\n{'=' * 78}")
+        print(recipe.to_markdown() if recipe else "No one-step route from the supported reaction classes.")
 
 
 def main() -> None:
@@ -81,6 +101,11 @@ def main() -> None:
     p.add_argument("--top", type=int, default=20, help="molecules to keep")
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--seed", type=int, help="make sampling reproducible")
+    p.add_argument("--english", help='describe the molecule in words, e.g. "water soluble, easy to make, '
+                                     'drug-like, logP around 3" (overrides the numeric options)')
+    p.add_argument("--recipes", type=int, default=0, metavar="N",
+                   help="print the synthesis recipe for the top N molecules")
+    p.add_argument("--recipes-out", help="write every recipe to this Markdown file")
     p.add_argument("--out", help="write the result table to this CSV")
     p.set_defaults(func=_design)
 

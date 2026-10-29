@@ -1,10 +1,14 @@
 # ChemGen
 
 Property-conditioned generation of drug-like molecules, with property prediction, safety
-filtering and ranking. You choose target properties (lipophilicity, drug-likeness,
-synthetic accessibility, solubility); the app proposes novel molecules that meet them.
+filtering, ranking and a one-step synthesis recipe for each result. Describe what you need
+in plain English (or set sliders) and the app proposes novel molecules that meet it. It runs
+entirely locally: no API keys, no paid services.
 
 ```
+English request  -->  rule-based parser (refuses weapons / toxins / controlled substances)
+      |
+      v
 target properties
       |
       v
@@ -17,7 +21,10 @@ target properties
  property models (solubility, logD; random forest + tree-spread uncertainty)
       |
       v
- desirability score  -->  diversity-aware top-k  -->  UI / CSV
+ desirability score  -->  diversity-aware top-k
+      |
+      v
+ one-step retrosynthesis (6 reaction classes)  -->  detailed recipe  -->  UI / CSV / Markdown
 ```
 
 ## Quick start
@@ -31,11 +38,37 @@ python -m chemgen train-predictors         # ~2 min on CPU
 python -m chemgen train-generator          # ~35 min on 4 CPU cores (60k molecules, 10 epochs)
 
 python -m chemgen design --logp 2.5 --qed 0.8 --sas 3 --min-logs -4 --n 2000 --top 20 --out hits.csv
+
+# the same, described in English, with recipes for the top 3 and all recipes saved to a file
+python -m chemgen design --english "easy to make, water soluble, drug-like, logP around 2.5, show 10" \
+    --recipes 3 --recipes-out recipes.md
+
 streamlit run app/streamlit_app.py
 ```
 
 `train-generator` accepts `--n-mols` (up to the full 250k) and `--epochs`; more data and
 epochs raise the fraction of valid, novel molecules.
+
+### English input
+
+The parser is rule-based. It reads stated values (`logP 3`, `QED 0.85`, `SAS 2.5`,
+`logS -3`, `10 molecules`) and descriptive words (`lipophilic`, `hydrophilic`,
+`drug-like`, `easy to make`, `water soluble`, `highly soluble`, ...). Stated values win over
+words, values are clamped to the supported range, and unspecified targets use defaults.
+It always echoes how it read your request. The generator is conditioned only on logP, QED,
+SA score and solubility, so requests about size, specific atoms, rings or a biological
+target (for example "a kinase inhibitor") are reported as not modelled rather than
+silently ignored.
+
+### Synthesis recipes
+
+Each result gets the best-ranked one-step disconnection from six reaction classes: amide
+coupling (HATU), sulfonamide formation, reductive amination, SNAr amination, Suzuki
+coupling and aryl-ether alkylation. The recipe lists the two precursors, a reagent table
+with equivalents and amounts computed for a 1 mmol scale, solvent, temperature and time,
+numbered procedure and work-up steps, purification, the expected [M+H]+, hazards, and
+warnings (competing functional groups, stereochemistry). Molecules that none of the
+templates can split (roughly 4 in 10 in a 50-molecule test) are shown without a recipe.
 
 ## Components
 
@@ -45,7 +78,9 @@ epochs raise the fraction of valid, novel molecules.
 | `chemgen/predictor.py` | Random forests on Morgan count fingerprints plus all RDKit 2D descriptors. Trained on ESOL (solubility) and Lipophilicity (logD 7.4). Evaluated on a scaffold split. Uncertainty is the standard deviation across trees. |
 | `chemgen/safety.py` | Hard filters on every generated molecule. See below. |
 | `chemgen/pipeline.py` | The sampling, filtering, scoring and ranking loop. |
-| `app/streamlit_app.py` | Web UI with a molecule grid, metrics, table and CSV download. |
+| `chemgen/nlu.py` | English request parser with a refusal screen for harmful requests. |
+| `chemgen/synthesis.py` | Template retrosynthesis, route ranking and recipe writer. |
+| `app/streamlit_app.py` | Web UI: English or slider input, molecule grid, metrics, table, per-molecule recipes, downloads. |
 
 ## Safety filters
 
@@ -55,11 +90,19 @@ Every molecule must pass all of these before it is scored or shown:
 - a single connected fragment, no radicals
 - molecular weight 150-600 and at most one Lipinski violation
 - no PAINS or NIH structural alerts (assay-interfering, reactive and toxic motifs)
+- no net charge (removable charges such as `[NH3+]` are neutralised first)
+- a hazard screen drops anything matching controlled-substance scaffolds (4-anilidopiperidines,
+  pethidine-type, amphetamine / cathinone / tryptamine types, barbiturates, benzodiazepines) or
+  energetic / unstable groups (azides, peroxides, N-nitroso, polynitro)
+
+The hazard screen also runs on every synthesis precursor: a route is discarded if one of its
+building blocks matches. The English parser refuses requests that mention weapons, toxins,
+explosives or controlled substances. These are coarse pattern screens, not a guarantee, and
+they are not exhaustive.
 
 Brenk alerts (unwanted functionality) do not reject a molecule but reduce its score.
 The generator is trained only on drug-like ZINC molecules and these filters apply on top
-of that. The system is scoped to drug-like small molecules; it does not provide
-synthesis routes.
+of that. The system is scoped to drug-like small molecules.
 
 ## Honest limitations
 
@@ -70,6 +113,12 @@ synthesis routes.
 - Generated molecules are computational proposals. Nothing here predicts bioactivity,
   toxicity, ADMET or whether a compound can actually be made. Those need experimental
   work or purpose-built models.
+- Recipes use generic textbook conditions for the reaction class. They are not optimised
+  for the specific molecule, give no yield prediction, and do not check that precursors are
+  commercially available. Confirm precedent in the literature, run a formal risk assessment,
+  and work only in a properly equipped laboratory under a trained chemist. The targets are
+  novel compounds of unknown toxicity.
+- Only one-step routes are proposed; molecules needing several steps get no recipe.
 
 ## Tests
 

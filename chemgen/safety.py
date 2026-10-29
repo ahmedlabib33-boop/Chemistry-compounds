@@ -20,6 +20,32 @@ MW_RANGE = (150.0, 600.0)
 MAX_LIPINSKI_VIOLATIONS = 1
 
 
+# Structural patterns for controlled-substance classes, explosives and energetic groups.
+# This is a coarse screen, not an exhaustive list: a molecule that matches is dropped
+# entirely, so it is never scored, ranked or given a synthesis procedure.
+HAZARD_PATTERNS = {
+    "4-anilidopiperidine (opioid-type) scaffold": "[CX3](=O)N(c)[CX4;R]1CCN(CC1)",
+    "pethidine-type 4-arylpiperidine-4-carboxylate": "c[C;R]1(C(=O)O[#6])CCN(C)CC1",
+    "amphetamine / phenethylamine-type": "c[CH2][CH]([CH3])[NX3;!$(N-C=O);!$(N-S=O)]",
+    "cathinone-type": "c[CX3](=O)[CH]([CH3])[NX3;!$(N-C=O);!$(N-S=O)]",
+    "tryptamine-type": "c1[nH]c2ccccc2c1CC[NX3;!$(N-C=O);!$(N-S=O)]",
+    "barbiturate": "O=C1NC(=O)C([#6])([#6])C(=O)N1",
+    "benzodiazepine core": "C1(c)=NCC(=O)Nc2ccccc12",
+    "azide": "N=[N+]=[N-]",
+    "peroxide": "[OX2][OX2]",
+    "N-nitroso": "N-N=O",
+}
+_HAZARD_MOLS = {name: Chem.MolFromSmarts(s) for name, s in HAZARD_PATTERNS.items()}
+
+
+def hazard_flags(mol: Chem.Mol) -> list[str]:
+    flags = [name for name, patt in _HAZARD_MOLS.items() if mol.HasSubstructMatch(patt)]
+    nitro = Chem.MolFromSmarts("[N+](=O)[O-]")
+    if len(mol.GetSubstructMatches(nitro)) >= 2:
+        flags.append("polynitro (energetic) compound")
+    return flags
+
+
 @dataclass
 class Assessment:
     passed: bool
@@ -70,6 +96,9 @@ def assess(mol: Chem.Mol) -> Assessment:
         reasons.append("radical")
     if len(Chem.GetMolFrags(mol)) > 1:
         reasons.append("multiple fragments")
+    if Chem.GetFormalCharge(mol) != 0:
+        reasons.append("net charge")
+    reasons += [f"hazard screen: {flag}" for flag in hazard_flags(mol)]
 
     mw = Descriptors.MolWt(mol)
     if not MW_RANGE[0] <= mw <= MW_RANGE[1]:

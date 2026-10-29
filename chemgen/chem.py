@@ -7,6 +7,7 @@ import sys
 import numpy as np
 from rdkit import Chem, DataStructs, RDConfig, RDLogger
 from rdkit.Chem import QED, Crippen, Descriptors, rdFingerprintGenerator, rdMolDescriptors
+from rdkit.Chem.MolStandardize import rdMolStandardize
 
 sys.path.append(os.path.join(RDConfig.RDContribDir, "SA_Score"))
 import sascorer  # noqa: E402
@@ -14,6 +15,7 @@ import sascorer  # noqa: E402
 RDLogger.DisableLog("rdApp.*")
 
 _MORGAN = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
+_UNCHARGER = rdMolStandardize.Uncharger()
 
 
 def to_mol(smiles: str | None) -> Chem.Mol | None:
@@ -23,6 +25,15 @@ def to_mol(smiles: str | None) -> Chem.Mol | None:
 def canonical(smiles: str | None) -> str | None:
     mol = to_mol(smiles)
     return Chem.MolToSmiles(mol) if mol is not None else None
+
+
+def neutralize(mol: Chem.Mol) -> Chem.Mol:
+    """Strip removable charges (e.g. [NH3+] -> NH2); nitro-type zwitterions are kept."""
+    return _UNCHARGER.uncharge(mol)
+
+
+def sa_score(mol: Chem.Mol) -> float:
+    return sascorer.calculateScore(mol)
 
 
 def basic_properties(mol: Chem.Mol) -> dict[str, float]:

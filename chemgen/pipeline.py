@@ -1,7 +1,7 @@
 """End-to-end design loop: sample -> validate -> dedupe -> novelty -> safety -> predict -> rank."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +9,7 @@ import pandas as pd
 import torch
 from rdkit import Chem, DataStructs
 
-from . import chem, safety
+from . import chem, safety, synthesis
 from .generator import Generator
 from .predictor import PropertyPredictor
 
@@ -26,6 +26,15 @@ class DesignTargets:
 class DesignResult:
     table: pd.DataFrame
     stats: dict
+    recipes: dict[str, synthesis.Recipe | None] = field(default_factory=dict)
+
+    def recipes_markdown(self) -> str:
+        parts = []
+        for i, smiles in enumerate(self.table["SMILES"], 1):
+            recipe = self.recipes.get(smiles)
+            body = recipe.to_markdown() if recipe else "No one-step route from the supported reaction classes."
+            parts.append(f"## Molecule {i}: `{smiles}`\n\n{body}")
+        return "\n\n---\n\n".join(parts)
 
 
 def desirability(df: pd.DataFrame, t: DesignTargets) -> np.ndarray:
@@ -48,7 +57,7 @@ class DesignPipeline:
 
     def design(self, targets: DesignTargets, n_samples: int = 2000, top_k: int = 20,
                temperature: float = 1.0, max_similarity: float = 0.7,
-               seed: int | None = None) -> DesignResult:
+               seed: int | None = None, with_recipes: bool = True) -> DesignResult:
         if seed is not None:
             torch.manual_seed(seed)
         raw =self.generator.sample(targets.logp, targets.qed, targets.sas, n=n_samples,
@@ -61,6 +70,7 @@ class DesignPipeline:
             if mol is None:
                 continue
             n_valid += 1
+            mol = chem.neutralize(mol)
             unique.setdefault(Chem.MolToSmiles(mol), mol)
 
         novel = {s: m for s, m in unique.items() if s not in self.train_smiles}
@@ -87,8 +97,15 @@ class DesignPipeline:
         df.insert(1, "score", desirability(df, targets))
         df = df.sort_values("score", ascending=False).reset_index(drop=True)
 
-        return DesignResult(self._diverse_top(df, mols_by_smiles=dict(zip(smiles_list, mols)),
-                                              top_k=top_k, max_similarity=max_similarity), stats)
+        table = self._diverse_top(df, mols_by_smiles=dict(zip(smiles_list, mols)),
+                                  top_k=top_k, max_similarity=max_similarity)
+        recipes: dict[str, synthesis.Recipe | None] = {}
+        if with_recipes:
+            by_smiles = dict(zip(smiles_list, mols))
+            recipes = {s: synthesis.propose_recipe(by_smiles[s]) for s in table["SMILES"]}
+            table["route"] = [recipes[s].summary if recipes[s] else "no route found"
+                              for s in table["SMILES"]]
+        return DesignResult(table, stats, recipes)
 
     @staticmethod
     def _diverse_top(df: pd.DataFrame, mols_by_smiles: dict[str, Chem.Mol], top_k: int,
