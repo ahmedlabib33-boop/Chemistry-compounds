@@ -70,6 +70,44 @@ numbered procedure and work-up steps, purification, the expected [M+H]+, hazards
 warnings (competing functional groups, stereochemistry). Molecules that none of the
 templates can split (roughly 4 in 10 in a 50-molecule test) are shown without a recipe.
 
+### Data-harvesting agents
+
+Agents pull more molecules from free public databases through their official APIs, then
+clean and screen them before they can reach any model:
+
+```bash
+# two agents (PubChem, ChEMBL) run in parallel; each stops after 5000 new accepted molecules
+python -m chemgen harvest --sources pubchem chembl --budget 5000     # -> data/harvested.csv
+
+# look up a molecular formula, a name, or structures similar to a SMILES on PubChem
+python -m chemgen lookup --formula C9H8O4
+python -m chemgen lookup --name ibuprofen
+python -m chemgen lookup --similar "CC(=O)Nc1ccc(O)cc1" --threshold 90
+
+# retrain the generator with the harvested molecules always included in full
+python -m chemgen train-generator --extra data/harvested.csv
+```
+
+| Agent | Job |
+| --- | --- |
+| `PubChemSource`, `ChEMBLSource` | Stream raw records from one database. Rate-limited (4 requests/s), retried with back-off, cached on disk under `data/cache`. A network failure ends that agent, not the others. |
+| `Curator` | Keeps the largest fragment, neutralises charges, canonicalises, rejects SMILES that are too long or unparseable, and applies every safety screen above. Reports why each record was rejected. |
+| `Store` | Thread-safe, deduplicating CSV with the source, source id and fetch date of every molecule. |
+| `harvest` | The coordinator: one agent per source, run in parallel, with a per-agent report. |
+
+In a live test, 400 molecules per source were accepted in 44 s; of the 1,096 records fetched,
+296 (27 %) were rejected, mostly for structural alerts, Lipinski violations, elements outside
+the whitelist, SMILES that were too long, and net charge. `lookup` shows only structures that
+pass the same screens and says how many were filtered out. Name and structure queries go
+through the same refusal screen as the English parser.
+
+Scope: this reads databases that publish an API; it does not scrape arbitrary web pages,
+whose formulas cannot be verified. Another database can be added by writing a class with a
+`name` and a `stream()` method and registering it in `SOURCES`. Be aware of the licences:
+PubChem data is public domain; ChEMBL is CC BY-SA 3.0, so attribute it and share derived
+datasets under the same licence. Harvested molecules are only as good as the databases; the
+generator's own predictions and recipes carry the same caveats as everything else here.
+
 ## Components
 
 | Module | Role |
@@ -78,7 +116,9 @@ templates can split (roughly 4 in 10 in a 50-molecule test) are shown without a 
 | `chemgen/predictor.py` | Random forests on Morgan count fingerprints plus all RDKit 2D descriptors. Trained on ESOL (solubility) and Lipophilicity (logD 7.4). Evaluated on a scaffold split. Uncertainty is the standard deviation across trees. |
 | `chemgen/safety.py` | Hard filters on every generated molecule. See below. |
 | `chemgen/pipeline.py` | The sampling, filtering, scoring and ranking loop. |
-| `chemgen/nlu.py` | English request parser with a refusal screen for harmful requests. |
+| `chemgen/nlu.py` | English request parser. |
+| `chemgen/guard.py` | The request-level refusal screen shared by the English parser and the web agents. |
+| `chemgen/harvest.py` | Data-harvesting agents: PubChem and ChEMBL sources, curator, store, coordinator, `lookup`. |
 | `chemgen/synthesis.py` | Template retrosynthesis, route ranking and recipe writer. |
 | `app/streamlit_app.py` | Web UI: English or slider input, molecule grid, metrics, table, per-molecule recipes, downloads. |
 

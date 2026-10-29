@@ -16,10 +16,9 @@ from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 
 from . import chem
-from .tokenizer import Vocab, tokenize
+from .tokenizer import MAX_TOKENS, Vocab, tokenize
 
 CONDITION_COLUMNS = ["logP", "QED", "SAS"]
-MAX_TOKENS = 80
 
 
 class ConditionalSmilesLM(nn.Module):
@@ -121,22 +120,39 @@ def _validity(gen: Generator, conds_raw: np.ndarray, n: int = 300) -> float:
     return float(np.mean([chem.to_mol(gen.vocab.decode(s)) is not None for s in seqs]))
 
 
+def _load_training_table(csv_path: Path, extra_csvs: list[Path], n_mols: int, seed: int) -> pd.DataFrame:
+    """Harvested files are always used in full; ZINC is subsampled to fill the rest of n_mols.
+
+    Every file needs smiles, logP, qed/QED and SAS columns.
+    """
+    cols = ["smiles", *CONDITION_COLUMNS]
+
+    def read(path: Path) -> pd.DataFrame:
+        table = pd.read_csv(path).rename(columns={"qed": "QED"})[cols]
+        table["smiles"] = table["smiles"].str.strip()
+        return table[table["smiles"].map(lambda s: len(tokenize(s)) <= MAX_TOKENS)]
+
+    extra = pd.concat([read(p) for p in extra_csvs], ignore_index=True) if extra_csvs else None
+    zinc = read(csv_path)
+    n_zinc = max(0, n_mols - (len(extra) if extra is not None else 0))
+    zinc = zinc.sample(n=min(n_zinc, len(zinc)), random_state=seed)
+    df = pd.concat([zinc, extra], ignore_index=True) if extra is not None else zinc
+    return df.sample(frac=1, random_state=seed).reset_index(drop=True)
+
+
 def train_generator(csv_path: Path, out_path: Path, train_smiles_path: Path, n_mols: int = 100_000,
                     epochs: int = 12, batch_size: int = 256, lr: float = 2e-3, seed: int = 0,
-                    log=print) -> dict:
+                    log=print, extra_csvs: list[Path] = ()) -> dict:
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
 
-    df = pd.read_csv(csv_path).rename(columns={"qed": "QED"})
-    df["smiles"] = df["smiles"].str.strip()
-    df = df[df["smiles"].map(lambda s: len(tokenize(s)) <= MAX_TOKENS)]
-    df = df.sample(n=min(n_mols, len(df)), random_state=seed).reset_index(drop=True)
+    df = _load_training_table(csv_path, list(extra_csvs), n_mols, seed)
     log(f"training on {len(df)} molecules")
 
     # Canonicalise once so novelty checks at generation time compare like with like.
-    canon = [chem.canonical(s) for s in df["smiles"]]
-    keep = [c is not None for c in canon]
-    df, canon = df[keep].reset_index(drop=True), [c for c in canon if c is not None]
+    df["canon"] = [chem.canonical(s) for s in df["smiles"]]
+    df = df.dropna(subset=["canon"]).drop_duplicates("canon").reset_index(drop=True)
+    canon = df["canon"].tolist()
     train_smiles_path.write_text("\n".join(canon))
 
     vocab = Vocab.build(canon)

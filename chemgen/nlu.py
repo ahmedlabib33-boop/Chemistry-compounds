@@ -10,20 +10,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from .guard import REFUSAL, is_blocked
 from .pipeline import DesignTargets
 
 # Slider ranges used by the UI; parsed values are clamped to them.
 LIMITS = {"logp": (-1.0, 6.0), "qed": (0.3, 0.95), "sas": (1.5, 6.0), "min_logs": (-8.0, 0.0)}
-
-_NEGATED_TOXIC = re.compile(r"\b(?:non|not|un|anti|less|low|no)[\s-]*toxic(?:ity)?\b")
-_BLOCKED = re.compile(
-    r"\b(?:poison\w*|toxins?|toxic|nerve\s+agents?|chemical\s+weapons?|bio-?\s?weapons?|weapons?|"
-    r"explosives?|bombs?|detonat\w*|lethal|deadly|kill\w*|fentanyl\w*|opioids?|opiates?|heroin|"
-    r"cocaine|meth(?:amphetamine)?|amphetamines?|narcotics?|psychoactives?|hallucinogens?|"
-    r"recreational\s+drugs?|street\s+drugs?|designer\s+drugs?|controlled\s+substances?|"
-    r"date[\s-]rape|ghb|sarin|vx|novichok|tabun|soman|ricin|mustard\s+gas|overdose)\b")
-REFUSAL = ("ChemGen designs drug-like screening molecules. It does not design weapons, toxic "
-           "agents, explosives or controlled substances, so this request was not processed.")
 
 # (pattern, value, label) tried in order; the first match wins.
 _LOGP_WORDS = [
@@ -96,7 +87,7 @@ def parse_request(text: str) -> ParsedRequest:
         req.interpretation.append("Empty description: using the default targets.")
         return req
 
-    if _BLOCKED.search(_NEGATED_TOXIC.sub(" ", lowered)):
+    if is_blocked(lowered):
         req.refusal = REFUSAL
         return req
 

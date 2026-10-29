@@ -30,8 +30,38 @@ def _train_generator(args) -> None:
     from .generator import train_generator
     MODEL_DIR.mkdir(exist_ok=True)
     result = train_generator(Path(args.data_dir) / "zinc250k.csv", MODEL_DIR / "generator.pt",
-                             MODEL_DIR / "train_smiles.txt", n_mols=args.n_mols, epochs=args.epochs)
+                             MODEL_DIR / "train_smiles.txt", n_mols=args.n_mols, epochs=args.epochs,
+                             extra_csvs=[Path(p) for p in args.extra])
     (MODEL_DIR / "generator_metrics.json").write_text(json.dumps(result, indent=2))
+
+
+def _harvest(args) -> None:
+    from .harvest import SOURCES, harvest
+    unknown = set(args.sources) - set(SOURCES)
+    if unknown:
+        raise SystemExit(f"unknown source(s): {', '.join(sorted(unknown))}; choose from {', '.join(SOURCES)}")
+    data_dir = Path(args.data_dir)
+    harvest(args.sources, args.budget, Path(args.out) if args.out else data_dir / "harvested.csv",
+            cache_dir=data_dir / "cache", seed=args.seed)
+
+
+def _lookup(args) -> None:
+    from .harvest import HttpClient, Refused, lookup
+    kind, value = next((k, v) for k, v in
+                       (("formula", args.formula), ("name", args.name), ("similar", args.similar)) if v)
+    try:
+        result = lookup(kind, value, limit=args.max, threshold=args.threshold,
+                        client=HttpClient(cache_dir=Path(args.data_dir) / "cache"))
+    except Refused as err:
+        print(err)
+        return
+    except ValueError as err:
+        raise SystemExit(str(err))
+    print(f"PubChem {kind} '{value}': {len(result.accepted)} structures pass ChemGen's screens"
+          + (f"; filtered out: {dict(result.rejected)}" if result.rejected else ""))
+    for row in result.accepted:
+        print(f"  CID {row['source_id']:>10}  {row['formula'] or '':14} {row['smiles']}   "
+              f"logP {row['logP']:.2f}  QED {row['qed']:.2f}  SAS {row['SAS']:.2f}")
 
 
 def _design(args) -> None:
@@ -90,7 +120,27 @@ def main() -> None:
     p.add_argument("--data-dir", default=str(DATA_DIR))
     p.add_argument("--n-mols", type=int, default=100_000)
     p.add_argument("--epochs", type=int, default=12)
+    p.add_argument("--extra", nargs="*", default=[], metavar="CSV",
+                   help="harvested CSV files to mix into the training data (see 'harvest')")
     p.set_defaults(func=_train_generator)
+
+    p = sub.add_parser("harvest", help="agents that pull molecules from PubChem / ChEMBL")
+    p.add_argument("--sources", nargs="+", default=["pubchem", "chembl"])
+    p.add_argument("--budget", type=int, default=2000, help="new molecules to accept per source")
+    p.add_argument("--data-dir", default=str(DATA_DIR))
+    p.add_argument("--out", help="output CSV (default: data/harvested.csv)")
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=_harvest)
+
+    p = sub.add_parser("lookup", help="look a formula, name or structure up on PubChem")
+    group = p.add_mutually_exclusive_group(required=True)
+    group.add_argument("--formula", help="molecular formula, e.g. C9H8O4")
+    group.add_argument("--name", help="compound name, e.g. ibuprofen")
+    group.add_argument("--similar", metavar="SMILES", help="structures similar to this SMILES")
+    p.add_argument("--max", type=int, default=25)
+    p.add_argument("--threshold", type=int, default=90, help="similarity threshold (percent)")
+    p.add_argument("--data-dir", default=str(DATA_DIR))
+    p.set_defaults(func=_lookup)
 
     p = sub.add_parser("design", help="generate and rank molecules for target properties")
     p.add_argument("--logp", type=float, default=2.5, help="target logP")

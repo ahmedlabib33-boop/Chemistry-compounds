@@ -87,12 +87,16 @@ def test_predictor_learns_and_reports_uncertainty(tmp_path):
     assert np.allclose(reloaded.predict(mols)[0], mean)
 
 
+def unique_molecules(n_chain=25, n_tail=26):
+    """650 distinct, simple molecules: alkyl aryl ethers with different chain lengths."""
+    return ["C" * a + "Oc1ccccc1" + "C" * b for a in range(1, n_chain + 1) for b in range(n_tail)]
+
+
 def test_generator_trains_saves_and_samples(tmp_path):
-    rows = []
-    for smiles in DRUGLIKE * 80:  # train_generator holds out at least 500 molecules for validation
-        rows.append({"smiles": smiles, **{k: v for k, v in chem.basic_properties(
-            Chem.MolFromSmiles(smiles)).items() if k in ("logP", "QED", "SAS")}})
-    df = pd.DataFrame(rows).rename(columns={"QED": "qed"})
+    smiles = unique_molecules()  # train_generator holds out at least 500 molecules for validation
+    props = [chem.basic_properties(Chem.MolFromSmiles(s)) for s in smiles]
+    df = pd.DataFrame({"smiles": smiles, "logP": [p["logP"] for p in props],
+                       "qed": [p["QED"] for p in props], "SAS": [p["SAS"] for p in props]})
     df.to_csv(tmp_path / "zinc.csv", index=False)
 
     train_generator(tmp_path / "zinc.csv", tmp_path / "g.pt", tmp_path / "train.txt",
@@ -101,6 +105,24 @@ def test_generator_trains_saves_and_samples(tmp_path):
     samples = gen.sample(logp=1.0, qed=0.7, sas=2.0, n=20)
     assert len(samples) == 20 and all(isinstance(s, str) for s in samples)
     assert (tmp_path / "train.txt").read_text().splitlines()
+
+
+def test_extra_training_files_are_mixed_in_and_duplicates_dropped(tmp_path):
+    smiles = unique_molecules()
+    props = [chem.basic_properties(Chem.MolFromSmiles(s)) for s in smiles]
+    pd.DataFrame({"smiles": smiles, "logP": [p["logP"] for p in props],
+                  "qed": [p["QED"] for p in props], "SAS": [p["SAS"] for p in props]}).to_csv(
+        tmp_path / "zinc.csv", index=False)
+    new, dup = "CCNC(=O)c1ccc(F)cc1", smiles[0]
+    pd.DataFrame({"smiles": [new, dup], "logP": [1.9, 2.0], "qed": [0.8, 0.6], "SAS": [1.5, 1.2],
+                  "source": ["pubchem", "pubchem"], "source_id": ["1", "2"],
+                  "fetched_at": ["2026-01-01"] * 2}).to_csv(tmp_path / "harvested.csv", index=False)
+
+    train_generator(tmp_path / "zinc.csv", tmp_path / "g.pt", tmp_path / "train.txt", n_mols=10_000,
+                    epochs=1, batch_size=64, log=lambda *_: None, extra_csvs=[tmp_path / "harvested.csv"])
+    trained = (tmp_path / "train.txt").read_text().splitlines()
+    assert Chem.MolToSmiles(Chem.MolFromSmiles(new)) in trained
+    assert len(trained) == len(set(trained)) == len(smiles) + 1
 
 
 def test_sampling_is_reproducible_with_seed():
