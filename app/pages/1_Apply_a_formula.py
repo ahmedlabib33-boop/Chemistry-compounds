@@ -11,7 +11,7 @@ from rdkit.Chem import Draw  # noqa: E402
 from common import load_bundle, model_stamp  # noqa: E402
 from chemgen import DATA_DIR  # noqa: E402
 from chemgen.apply import analyze  # noqa: E402
-from chemgen.harvest import HttpClient, HttpError, Refused, candidates  # noqa: E402
+from chemgen.harvest import HttpClient, HttpError, PubChemSource, Refused, candidates  # noqa: E402
 
 st.set_page_config(page_title="Apply a formula", layout="wide")
 st.title("Apply a formula")
@@ -31,9 +31,11 @@ KINDS = {"Structure (SMILES)": ("smiles", "CC(=O)Nc1ccc(O)cc1"),
 choice = st.radio("I have a", list(KINDS), horizontal=True)
 kind, example = KINDS[choice]
 value = st.text_input("Value", value=example, key=f"value_{kind}")
-cols = st.columns(2)
-scale = cols[0].number_input("Reaction scale (mmol)", 0.1, 100.0, 1.0, 0.1)
-limit = cols[1].slider("Most structures to analyse (formula / name)", 1, 10, 3, disabled=kind == "smiles")
+cols = st.columns(3)
+scale = cols[0].number_input("Final-step scale (mmol)", 0.1, 100.0, 1.0, 0.1)
+max_steps = cols[1].slider("Maximum synthesis steps", 1, 5, 3)
+limit = cols[2].slider("Most structures to analyse (formula / name)", 1, 10, 3, disabled=kind == "smiles")
+check = st.checkbox("Check starting materials on PubChem (needs internet)", value=False)
 
 if st.button("Analyse", type="primary"):
     smiles_list, error = [], None
@@ -50,8 +52,9 @@ if st.button("Analyse", type="primary"):
             error = str(err)
         except (ValueError, HttpError) as err:
             error = str(err)
-    st.session_state["apply"] = {"error": error,
-                                 "analyses": [analyze(s, bundle, scale_mmol=scale) for s in smiles_list]}
+    lookup = PubChemSource(HttpClient(cache_dir=DATA_DIR / "cache")).cid_for_smiles if check else None
+    st.session_state["apply"] = {"error": error, "analyses": [
+        analyze(s, bundle, scale_mmol=scale, max_steps=max_steps, known_lookup=lookup) for s in smiles_list]}
 
 state = st.session_state.get("apply")
 if state is None:

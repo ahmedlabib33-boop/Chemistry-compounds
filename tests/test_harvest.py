@@ -139,6 +139,14 @@ def test_pubchem_similarity_posts_smiles():
     assert fake.calls[0][1] == {"smiles": ASPIRIN} and "Threshold=95" in fake.calls[0][0]
 
 
+def test_pubchem_structure_lookup_returns_the_cid_or_none():
+    fake = FakeClient([("compound/smiles/cids", lambda url, data: {"IdentifierList": {"CID": [176]}}
+                        if data["smiles"] == "CC(=O)O" else None)])
+    src = PubChemSource(fake)
+    assert src.cid_for_smiles("CC(=O)O") == 176 and src.cid_for_smiles("CCCCCCCCCCCCCCCCCC(=O)N") is None
+    assert PubChemSource(FakeClient([("compound/smiles/cids", {"IdentifierList": {"CID": [0]}})])).cid_for_smiles("C") is None
+
+
 def test_pubchem_missing_results_are_empty_not_errors():
     assert list(PubChemSource(FakeClient([])).by_name("no-such-thing")) == []
 

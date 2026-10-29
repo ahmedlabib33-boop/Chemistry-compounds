@@ -107,6 +107,9 @@ def test_neutralize_removes_ammonium_and_charged_leftovers_are_rejected():
     ("c1ccnc(n1)N1CCCC1", "snar", {"Clc1ncccn1", "C1CCNC1"}),
     ("c1ccc(cc1)-c1ccncc1", "suzuki", {"Brc1ccncc1", "OB(O)c1ccccc1"}),
     ("CCCOc1ccccc1", "ether", {"CCCBr", "Oc1ccccc1"}),
+    ("CCOC(=O)c1ccccc1", "ester", {"O=C(O)c1ccccc1", "CCO"}),
+    ("CCNC(=O)Nc1ccccc1", "urea", {"CCN", "Nc1ccccc1"}),
+    ("CC(C)(C)OC(=O)N1CCCC1", "boc", {"CC(C)(C)OC(=O)OC(=O)OC(C)(C)C", "C1CCNC1"}),
 ])
 def test_each_reaction_class_disconnects_correctly(target, key, expected):
     route = best_route(target)
@@ -151,7 +154,7 @@ def test_recipe_quantities_follow_from_molecular_weights():
 
 @pytest.mark.parametrize("target", [
     "CC(=O)Nc1ccc(O)cc1", "CCNS(=O)(=O)c1ccc(C)cc1", "CCN(CC)Cc1ccccc1", "c1ccnc(n1)N1CCCC1",
-    "c1ccc(cc1)-c1ccncc1", "CCCOc1ccccc1"])
+    "c1ccc(cc1)-c1ccncc1", "CCCOc1ccccc1", "CCOC(=O)c1ccccc1", "CCNC(=O)Nc1ccccc1", "CC(C)(C)OC(=O)N1CCCC1"])
 def test_every_reaction_class_renders_a_complete_recipe(target):
     markdown = synthesis.propose_recipe(Chem.MolFromSmiles(target)).to_markdown()
     for section in ["**Reagents**", "**Procedure**", "**Work-up**", "**Purification:**",
@@ -175,4 +178,4 @@ def test_recipes_markdown_lists_every_molecule_and_handles_missing_routes():
     recipes = {good: synthesis.propose_recipe(Chem.MolFromSmiles(good)), none: None}
     text = DesignResult(table, {}, recipes).recipes_markdown()
     assert "Molecule 1" in text and "Molecule 2" in text
-    assert "No one-step route" in text and "Amide coupling" in text
+    assert "No route from the supported" in text and "Amide coupling" in text

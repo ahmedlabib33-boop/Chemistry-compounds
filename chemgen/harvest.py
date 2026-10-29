@@ -164,6 +164,12 @@ class PubChemSource:
         for i in range(0, len(cids), self.batch):
             yield from self._records(cids[i:i + self.batch])
 
+    def cid_for_smiles(self, smiles: str) -> int | None:
+        """PubChem CID of this exact structure, or None. A known compound is not necessarily purchasable."""
+        payload = self.client.get_json(f"{self.BASE}/compound/smiles/cids/JSON", data={"smiles": smiles})
+        cids = ((payload or {}).get("IdentifierList") or {}).get("CID", [])
+        return cids[0] if cids and cids[0] else None
+
     def by_name(self, name: str) -> Iterator[RawRecord]:
         payload = self.client.get_json(
             f"{self.BASE}/compound/name/{urllib.parse.quote(name)}/property/{self.PROPS}/JSON")

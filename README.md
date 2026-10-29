@@ -1,7 +1,7 @@
 # ChemGen
 
 Property-conditioned generation of drug-like molecules, with property prediction, safety
-filtering, ranking and a one-step synthesis recipe for each result. Describe what you need
+filtering, ranking and a detailed multi-step synthesis recipe for each result. Describe what you need
 in plain English (or set sliders) and the app proposes novel molecules that meet it. It runs
 entirely locally: no API keys, no paid services.
 
@@ -24,7 +24,7 @@ target properties
  desirability score  -->  diversity-aware top-k
       |
       v
- one-step retrosynthesis (6 reaction classes)  -->  detailed recipe  -->  UI / CSV / Markdown
+ multi-step retrosynthesis (9 reaction classes)  -->  step-by-step recipes  -->  UI / CSV / Markdown
 ```
 
 ## How to prepare the app
@@ -82,15 +82,36 @@ SA score and solubility, so requests about size, specific atoms, rings or a biol
 target (for example "a kinase inhibitor") are reported as not modelled rather than
 silently ignored.
 
-### Synthesis recipes
+### Synthesis recipes (multi-step)
 
-Each result gets the best-ranked one-step disconnection from six reaction classes: amide
-coupling (HATU), sulfonamide formation, reductive amination, SNAr amination, Suzuki
-coupling and aryl-ether alkylation. The recipe lists the two precursors, a reagent table
-with equivalents and amounts computed for a 1 mmol scale, solvent, temperature and time,
-numbered procedure and work-up steps, purification, the expected [M+H]+, hazards, and
-warnings (competing functional groups, stereochemistry). Molecules that none of the
-templates can split (roughly 4 in 10 in a 50-molecule test) are shown without a recipe.
+Each result gets a planned route of up to `--steps` reactions (default 3, at most 6) built from
+nine reaction classes: amide coupling (HATU), ester coupling (EDC/DMAP), urea formation (CDI),
+sulfonamide formation, reductive amination, SNAr amination, Suzuki coupling, aryl-ether
+alkylation and Boc protection. A complex precursor is disconnected again, recursively, until
+every branch ends in a simple starting material, and the cheapest plan wins (one unit per
+step, extra for chemoselectivity conflicts, a large penalty for a complex precursor that cannot
+be broken down). Every intermediate and starting material passes the hazard screen.
+
+The write-up has: a route overview; a table of starting materials with the amount to weigh out;
+and, for **every step**, its inputs (which starting materials, and which earlier step's product),
+a reagent table with equivalents and amounts, solvent, temperature and time, numbered procedure
+and work-up, purification, expected [M+H]+, hazards and warnings (competing functional groups,
+stereochemistry). Quantities are scaled back from the final step: each earlier step is sized so
+that, at an assumed 80 % yield per step, it delivers what the next step consumes. That 80 % is a
+planning assumption, not a prediction, and the write-up says so.
+
+```bash
+python -m chemgen design --english "easy to make, drug-like" --steps 4 --recipes 3
+python -m chemgen apply --smiles "O=C(NCc1ccc(F)cc1)c1ccc(CN2CCN(c3ncccn3)CC2)cc1" --steps 3 --check-precursors
+```
+
+`--check-precursors` looks every starting material up on PubChem. A known compound is not
+necessarily one you can buy, so the report says "check a supplier"; a structure PubChem has never
+seen is flagged. Without it, small simple precursors (up to 12 heavy atoms, or up to 18 with a low
+SA score) are assumed to be available building blocks, a heuristic and not a catalogue lookup.
+On 120 designed molecules, 102 (85 %) get a route within three steps; the rest need chemistry
+outside the nine classes (for example free alcohols and ethers with no carbonyl handle, free
+primary amines, ketones) or whose only route needs a building block the hazard screen rejects.
 
 ### Apply a formula
 
@@ -109,7 +130,7 @@ Three tiers apply. Structures matching the hazard screen are **refused** with no
 Structures that cannot be handled (unparseable; elements outside C N O S F Cl Br I) are
 reported as **unsupported**. Everything else gets predictions; the recipe is **withheld** if the
 structure carries NIH reactive or toxic alerts, and a structure with no one-step route says
-that it needs a multi-step synthesis. The same function is on the **Apply a formula** page.
+that it needs a route designed by a chemist. The same function is on the **Apply a formula** page.
 
 ### Automation: the app improves itself
 
@@ -235,7 +256,9 @@ of that. The system is scoped to drug-like small molecules.
   commercially available. Confirm precedent in the literature, run a formal risk assessment,
   and work only in a properly equipped laboratory under a trained chemist. The targets are
   novel compounds of unknown toxicity.
-- Only one-step routes are proposed; molecules needing several steps get no recipe.
+- Routes are built only from the nine reaction classes, up to six steps. Protecting groups are not
+  added automatically (a conflict is flagged instead), and nothing here predicts yield or checks that a
+  starting material can actually be bought; molecules outside the classes get no recipe.
 
 ## Tests
 

@@ -25,9 +25,16 @@ PROTON_MASS = 1.007276
 _AMINE = "[NX3;H2,H1;!a;!$(N-[#6,#16]=[O,S,N])]"
 _ACID = "[CX3](=O)[OX2H1]"
 _PHENOL = "c[OX2H1]"
+_ALCOHOL = "[CX4][OX2H1]"
 _CARBONYL = "[CX3;!$(C-[#7,#8,#16])]=O"
 _ARYL_BR_I = "c[Br,I]"
 _ALKYL_HALIDE = "[CX4][Cl,Br,I]"
+
+
+# Equivalents of (electrophile, nucleophile) per reaction; the limiting reagent is 1.0.
+EQUIVALENTS = {"amide": (1.0, 1.1), "sulfonamide": (1.0, 1.1), "reductive_amination": (1.0, 1.1),
+               "snar": (1.0, 1.5), "suzuki": (1.0, 1.3), "ether": (1.2, 1.0),
+               "ester": (1.0, 1.5), "urea": (1.0, 1.1), "boc": (1.2, 1.0)}
 
 
 @dataclass(frozen=True)
@@ -48,7 +55,7 @@ TEMPLATES = (
     Template(
         "sulfonamide", "Sulfonamide formation",
         "[#6:4][S:1](=[O:2])(=[O:5])-!@[NX3;H1,H0;!a;!$(N-[#6]=O):3]>>[#6:4][S:1](=[O:2])(=[O:5])Cl.[N:3]",
-        0.1, (("S(=O)(=O)Cl", 1), (_AMINE, 0)), ((_AMINE, 1),)),
+        0.1, (("S(=O)(=O)Cl", 1), (_AMINE, 0)), ((_AMINE, 1), (_ACID, 0))),
     Template(
         "reductive_amination", "Reductive amination (NaBH(OAc)3)",
         "[CX4;H1,H2;!$(C(-[N,O,S])-[N,O,S]):1]-!@[NX3;H1,H0;!a;!$(N-[#6,#16]=[O,S,N]):2]>>[C:1]=O.[N:2]",
@@ -66,6 +73,18 @@ TEMPLATES = (
         "[CX4;H2:1]-!@[OX2:2]-!@[c:3]>>Br[C:1].[O:2][c:3]",
         0.5, ((_ALKYL_HALIDE, 1), (_AMINE, 0), (_PHENOL, 0), (_ACID, 0)),
         ((_PHENOL, 1), (_AMINE, 0), (_ACID, 0))),
+    Template(
+        "ester", "Ester coupling (EDC/DMAP)",
+        "[#6:4][C:1](=[O:2])-!@[OX2:3]-[CX4;!H0:5]>>[#6:4][C:1](=[O:2])O.[OX2:3][C:5]",
+        0.4, ((_ACID, 1), (_AMINE, 0)), ((_ALCOHOL, 1), (_AMINE, 0), (_ACID, 0))),
+    Template(
+        "urea", "Urea formation (CDI)",
+        "[NX3;H1,H0;!a:1]-!@[CX3](=O)-!@[NX3;H1,H0;!a:2]>>[N:1].[N:2]",
+        0.4, ((_AMINE, 1), (_ACID, 0)), ((_AMINE, 1), (_ACID, 0))),
+    Template(
+        "boc", "Boc protection (Boc2O)",
+        "[NX3;H1,H0;!a:1]-!@[CX3](=O)[OX2][CX4]([CH3])([CH3])[CH3]>>CC(C)(C)OC(=O)OC(=O)OC(C)(C)C.[N:1]",
+        0.2, (), ((_AMINE, 1),)),
 )
 _BY_KEY = {t.key: t for t in TEMPLATES}
 
@@ -180,15 +199,17 @@ class Recipe:
     hazards: list[str]
     warnings: list[str] = field(default_factory=list)
     alternatives: int = 0
+    electrophile_mmol: float = 0.0  # consumed by this step, for scaling the step that makes it
+    nucleophile_mmol: float = 0.0
 
     @property
     def summary(self) -> str:
         return f"{self.reaction_name}: {self.electrophile_smiles} + {self.nucleophile_smiles}"
 
-    def to_markdown(self) -> str:
+    def to_markdown(self, title: str | None = None) -> str:
         theo = self.mw * self.scale_mmol
         lines = [
-            f"### {self.reaction_name}: one-step route",
+            title or f"### {self.reaction_name}: one-step route",
             f"**Target:** `{self.target_smiles}`  ({self.formula}, MW {self.mw:.2f}, "
             f"exact mass {self.exact_mass:.4f}, expected [M+H]+ {self.exact_mass + PROTON_MASS:.4f})",
             "",
@@ -254,7 +275,7 @@ def _procedure(key, e_smiles, n_smiles, e_mw, n_mw, scale):
     """Return (reagents, solvent, temperature, duration, steps, workup, purification, hazards)."""
     e_amt = f"{scale * e_mw:.0f} mg"
     if key == "amide":
-        n_eq = 1.1
+        n_eq = EQUIVALENTS["amide"][1]
         reagents = _substrate_rows(e_smiles, n_smiles, e_mw, n_mw, "carboxylic acid (limiting)",
                                    "amine", n_eq, scale) + [
             Reagent("HATU", "coupling agent", 1.2, 380.23),
@@ -284,7 +305,7 @@ def _procedure(key, e_smiles, n_smiles, e_mw, n_mw, scale):
                  "DMF is a reproductive toxicant and is absorbed through skin.",
                  "DIPEA is flammable and corrosive."])
     if key == "sulfonamide":
-        n_eq = 1.1
+        n_eq = EQUIVALENTS["sulfonamide"][1]
         reagents = _substrate_rows(e_smiles, n_smiles, e_mw, n_mw, "sulfonyl chloride (limiting)",
                                    "amine", n_eq, scale) + [
             Reagent("Triethylamine", "base", 2.0, 101.19, density=0.726)]
@@ -309,7 +330,7 @@ def _procedure(key, e_smiles, n_smiles, e_mw, n_mw, scale):
                  "release HCl on contact with water.",
                  "Dichloromethane is volatile and a suspected carcinogen."])
     if key == "reductive_amination":
-        n_eq = 1.1
+        n_eq = EQUIVALENTS["reductive_amination"][1]
         reagents = _substrate_rows(e_smiles, n_smiles, e_mw, n_mw, "aldehyde/ketone (limiting)",
                                    "amine", n_eq, scale) + [
             Reagent("Acetic acid", "catalyst", 1.0, 60.05, density=1.049),
@@ -337,7 +358,7 @@ def _procedure(key, e_smiles, n_smiles, e_mw, n_mw, scale):
                  "Aldehydes can be irritants or sensitisers.",
                  "Dichloromethane is volatile and a suspected carcinogen."])
     if key == "snar":
-        n_eq = 1.5
+        n_eq = EQUIVALENTS["snar"][1]
         reagents = _substrate_rows(e_smiles, n_smiles, e_mw, n_mw, "heteroaryl chloride (limiting)",
                                    "amine", n_eq, scale) + [
             Reagent("DIPEA", "base", 2.5, 129.25, density=0.742)]
@@ -360,7 +381,7 @@ def _procedure(key, e_smiles, n_smiles, e_mw, n_mw, scale):
                  "NMP is a reproductive toxicant; DMSO carries dissolved compounds through skin.",
                  "Reactivity depends on ring activation; unactivated rings may need Pd catalysis instead."])
     if key == "suzuki":
-        n_eq = 1.3
+        n_eq = EQUIVALENTS["suzuki"][1]
         reagents = _substrate_rows(e_smiles, n_smiles, e_mw, n_mw, "aryl bromide (limiting)",
                                    "boronic acid", n_eq, scale) + [
             Reagent("Pd(dppf)Cl2·CH2Cl2", "catalyst", 0.05, 816.64),
@@ -387,15 +408,15 @@ def _procedure(key, e_smiles, n_smiles, e_mw, n_mw, scale):
                  "1,4-Dioxane is a suspected carcinogen and forms peroxides: use fresh, inhibited solvent.",
                  "Boronic acids can protodeboronate; use fresh material."])
     if key == "ether":
-        n_eq = 1.2
+        e_eq = EQUIVALENTS["ether"][0]
         reagents = [Reagent(f"`{n_smiles}`", "phenol (limiting)", 1.0, n_mw),
-                    Reagent(f"`{e_smiles}`", "alkyl bromide", n_eq, e_mw),
+                    Reagent(f"`{e_smiles}`", "alkyl bromide", e_eq, e_mw),
                     Reagent("Potassium carbonate", "base", 2.0, 138.21)]
         steps = [
             f"In a dry flask, dissolve the phenol ({scale * n_mw:.0f} mg, {scale:g} mmol) in "
             f"anhydrous DMF ({5 * scale:g} mL) under nitrogen.",
             "Add finely ground K2CO3 (2.0 equiv) and stir 15 min at room temperature.",
-            f"Add the alkyl bromide ({n_eq} equiv) and heat to 60 °C; follow by TLC or LC-MS.",
+            f"Add the alkyl bromide ({e_eq} equiv) and heat to 60 °C; follow by TLC or LC-MS.",
         ]
         workup = [
             f"Cool, dilute with water ({25 * scale:g} mL) and extract with ethyl acetate "
@@ -409,6 +430,76 @@ def _procedure(key, e_smiles, n_smiles, e_mw, n_mw, scale):
                 ["Alkyl bromides are alkylating agents and may be lachrymators or mutagens: "
                  "handle only in a fume hood.",
                  "DMF is a reproductive toxicant and is absorbed through skin."])
+    if key == "ester":
+        n_eq = EQUIVALENTS["ester"][1]
+        reagents = _substrate_rows(e_smiles, n_smiles, e_mw, n_mw, "carboxylic acid (limiting)",
+                                   "alcohol", n_eq, scale) + [
+            Reagent("EDC·HCl", "coupling agent", 1.5, 191.70),
+            Reagent("DMAP", "catalyst", 0.1, 122.17)]
+        steps = [
+            "Oven-dry a flask with a stir bar and flush with nitrogen.",
+            f"Dissolve the carboxylic acid ({e_amt}, {scale:g} mmol), the alcohol ({n_eq} equiv) and DMAP "
+            f"(0.1 equiv) in anhydrous dichloromethane ({10 * scale:g} mL) and cool to 0 °C.",
+            "Add EDC·HCl (1.5 equiv) in one portion.",
+            "Allow to warm to room temperature and stir; follow by TLC or LC-MS until the acid is consumed.",
+        ]
+        workup = [
+            f"Dilute with dichloromethane ({20 * scale:g} mL).",
+            f"Wash with 1 M HCl ({15 * scale:g} mL; omit if the product is basic), saturated aqueous NaHCO3 "
+            f"({15 * scale:g} mL) and brine; this removes the urea by-product, DMAP and unreacted acid.",
+            "Dry over Na2SO4, filter and concentrate.",
+        ]
+        return (reagents, "Dichloromethane, anhydrous (0.1 M)", "0 °C, then room temperature", "4-16 h",
+                steps, workup, "Flash chromatography (hexanes/ethyl acetate).",
+                ["EDC·HCl is a skin and respiratory sensitiser.",
+                 "DMAP is toxic and readily absorbed through the skin: wear double gloves.",
+                 "Dichloromethane is volatile and a suspected carcinogen."])
+    if key == "urea":
+        n_eq = EQUIVALENTS["urea"][1]
+        reagents = _substrate_rows(e_smiles, n_smiles, e_mw, n_mw, "first amine (limiting)",
+                                   "second amine", n_eq, scale) + [
+            Reagent("1,1'-Carbonyldiimidazole (CDI)", "carbonyl source", 1.1, 162.15)]
+        steps = [
+            "Oven-dry a flask with a stir bar and flush with nitrogen.",
+            f"Dissolve CDI (1.1 equiv) in anhydrous THF ({5 * scale:g} mL) and add the first amine "
+            f"({e_amt}, {scale:g} mmol) dropwise as a solution in THF ({5 * scale:g} mL).",
+            "Stir 1-2 h at room temperature until LC-MS shows the carbamoyl-imidazole intermediate "
+            "(gentle CO2 evolution; keep the vessel vented through a bubbler).",
+            f"Add the second amine ({n_eq} equiv). If it is a hydrochloride salt, add 1.0 equiv of triethylamine.",
+            "Stir at room temperature, or warm to 50 °C if conversion is slow; follow by LC-MS.",
+        ]
+        workup = [
+            f"Concentrate, redissolve in ethyl acetate ({30 * scale:g} mL).",
+            f"Wash with water (2 × {15 * scale:g} mL) to remove imidazole, then 0.5 M HCl (omit if the product "
+            "is basic) and brine.",
+            "Dry over Na2SO4, filter and concentrate.",
+        ]
+        return (reagents, "THF, anhydrous (0.1 M)", "Room temperature (up to 50 °C)", "4-16 h", steps, workup,
+                "Recrystallisation or flash chromatography (DCM/methanol).",
+                ["CDI is moisture-sensitive and a sensitiser; it releases CO2 and imidazole.",
+                 "Add the first amine slowly to avoid symmetrical urea by-product."])
+    if key == "boc":
+        e_eq = EQUIVALENTS["boc"][0]
+        reagents = [Reagent(f"`{n_smiles}`", "amine (limiting)", 1.0, n_mw),
+                    Reagent("Di-tert-butyl dicarbonate (Boc2O)", "protecting reagent", e_eq, 218.25, density=0.95),
+                    Reagent("Triethylamine", "base", 1.5, 101.19, density=0.726)]
+        steps = [
+            f"Dissolve the amine ({scale * n_mw:.0f} mg, {scale:g} mmol) in dichloromethane ({5 * scale:g} mL) "
+            "and add triethylamine (1.5 equiv); if the amine is a hydrochloride salt add a further 1.0 equiv.",
+            "Cool to 0 °C and add Boc2O (1.2 equiv) neat or as a solution in dichloromethane.",
+            "Allow to warm to room temperature and stir with a vent to a bubbler (CO2 is released); follow by TLC "
+            "(ninhydrin stain loses the amine spot) or LC-MS.",
+        ]
+        workup = [
+            f"Dilute with dichloromethane ({15 * scale:g} mL) and wash with 10 % aqueous citric acid (omit if the "
+            "product is basic), saturated aqueous NaHCO3 and brine.",
+            "Dry over Na2SO4, filter and concentrate.",
+        ]
+        return (reagents, "Dichloromethane (0.2 M)", "0 °C, then room temperature", "2-12 h", steps, workup,
+                "Flash chromatography (hexanes/ethyl acetate).",
+                ["Boc2O is toxic if inhaled, flammable and a sensitiser: handle only in a fume hood.",
+                 "Never seal the reaction: CO2 is released and pressure builds.",
+                 "Dichloromethane is volatile and a suspected carcinogen."])
     raise KeyError(key)
 
 
@@ -452,6 +543,8 @@ def build_recipe(target: Chem.Mol, route: Route, scale_mmol: float = 1.0,
         solvent=solvent, temperature=temperature, duration=duration,
         steps=steps, workup=workup, purification=purification,
         hazards=hazards + _GENERAL_HAZARDS, warnings=warnings, alternatives=alternatives,
+        electrophile_mmol=EQUIVALENTS[route.template.key][0] * scale_mmol,
+        nucleophile_mmol=EQUIVALENTS[route.template.key][1] * scale_mmol,
     )
 
 

@@ -20,7 +20,7 @@ from pathlib import Path
 import pandas as pd
 from rdkit import Chem, DataStructs
 
-from . import DATA_DIR, MODEL_DIR, chem, safety, synthesis
+from . import DATA_DIR, MODEL_DIR, chem, multistep, safety
 from .predictor import DATASETS, PropertyPredictor
 
 HARD_PREFIXES = ("hazard screen", "disallowed elements", "radical")
@@ -60,7 +60,7 @@ class Analysis:
     properties: dict[str, float] = field(default_factory=dict)
     predictions: dict[str, tuple[float, float]] = field(default_factory=dict)  # name -> (mean, std)
     nearest_similarity: float | None = None
-    recipe: synthesis.Recipe | None = None
+    recipe: multistep.MultiStepRecipe | None = None
     recipe_note: str | None = None
     notes: list[str] = field(default_factory=list)
 
@@ -106,7 +106,8 @@ class Analysis:
         return "\n".join(lines)
 
 
-def analyze(smiles: str, bundle: ModelBundle, scale_mmol: float = 1.0) -> Analysis:
+def analyze(smiles: str, bundle: ModelBundle, scale_mmol: float = 1.0, max_steps: int = 3,
+            known_lookup=None) -> Analysis:
     mol = chem.to_mol((smiles or "").strip())
     if mol is None:
         return Analysis(input=smiles, status="invalid")
@@ -140,8 +141,10 @@ def analyze(smiles: str, bundle: ModelBundle, scale_mmol: float = 1.0) -> Analys
         analysis.recipe_note = ("withheld: the structure carries reactive or toxic structural alerts "
                                 f"({', '.join(sorted(set(toxic)))}).")
     else:
-        analysis.recipe = synthesis.propose_recipe(mol, scale_mmol)
+        analysis.recipe = multistep.propose_plan(mol, scale_mmol, max_steps)
         if analysis.recipe is None:
-            analysis.recipe_note = ("none of the six supported one-step reaction classes disconnects "
-                                    "this structure; it needs a multi-step route designed by a chemist.")
+            analysis.recipe_note = ("none of the nine supported reaction classes disconnects this "
+                                    "structure; it needs a route designed by a chemist.")
+        elif known_lookup is not None:
+            analysis.recipe.annotate(known_lookup)
     return analysis

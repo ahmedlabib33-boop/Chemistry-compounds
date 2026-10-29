@@ -46,6 +46,8 @@ with st.sidebar:
     st.header("Search")
     n_samples = st.select_slider("Molecules to sample", [500, 1000, 2000, 5000, 10000], value=2000)
     top_k = st.slider("Molecules to show", 5, 50, 20)
+    max_steps = st.slider("Maximum synthesis steps", 1, 5, 3,
+                          help="Longest route the planner may propose for each molecule.")
     temperature = st.slider("Sampling temperature", 0.5, 1.5, 1.0, 0.05,
                             help="Lower is safer and more conventional; higher is more novel but less valid.")
     seed = st.number_input("Seed (0 = random)", min_value=0, value=0, step=1)
@@ -66,7 +68,7 @@ if run:
         with st.spinner("Sampling, filtering, scoring and planning syntheses..."):
             st.session_state["result"] = pipeline.design(
                 targets, n_samples=n_samples, top_k=shown, temperature=temperature,
-                seed=int(seed) or None)
+                seed=int(seed) or None, max_steps=max_steps)
         st.session_state["request"] = request
 
 request = st.session_state.get("request")
@@ -105,21 +107,22 @@ st.dataframe(table.round(3), width="stretch", hide_index=True)
 st.download_button("Download table (CSV)", table.to_csv(index=False), "designed_molecules.csv", "text/csv")
 
 st.header("Synthesis recipes")
-st.caption("One-step routes from six common reaction classes (amide coupling, sulfonamide formation, "
-           "reductive amination, SNAr, Suzuki coupling, aryl-ether alkylation). Conditions are generic "
-           "textbook procedures, not optimised for these molecules and not experimentally validated.")
+st.caption("Routes of up to the chosen number of steps from nine common reaction classes (amide, ester, "
+           "urea, sulfonamide, reductive amination, SNAr, Suzuki, aryl-ether alkylation, Boc protection). "
+           "Each step has its own procedure, with earlier steps scaled to feed later ones. Conditions are "
+           "generic textbook procedures, not optimised for these molecules and not experimentally validated.")
 st.download_button("Download all recipes (Markdown)", result.recipes_markdown(), "recipes.md", "text/markdown")
 for i, smiles in enumerate(table["SMILES"], 1):
     recipe = result.recipes.get(smiles)
-    title = f"#{i}  {smiles}  ·  {recipe.reaction_name if recipe else 'no one-step route'}"
+    title = f"#{i}  {smiles}  ·  {recipe.summary if recipe else 'no route found'}"
     with st.expander(title):
         if recipe is None:
-            st.write("None of the supported reaction classes disconnects this molecule in one step.")
+            st.write("None of the supported reaction classes reaches this molecule within the step limit. "
+                     "Try raising the maximum number of steps.")
             continue
-        precursors = [Chem.MolFromSmiles(recipe.electrophile_smiles),
-                      Chem.MolFromSmiles(recipe.nucleophile_smiles), mols[i - 1]]
-        st.image(Draw.MolsToGridImage(precursors, molsPerRow=3, subImgSize=(260, 200),
-                                      legends=["precursor A", "precursor B", "target"]))
+        materials = [Chem.MolFromSmiles(m.smiles) for m in recipe.starting_materials] + [mols[i - 1]]
+        st.image(Draw.MolsToGridImage(materials, molsPerRow=4, subImgSize=(240, 190),
+                                      legends=["starting material"] * (len(materials) - 1) + ["target"]))
         st.markdown(recipe.to_markdown())
 
 st.caption("Predicted solubility and logD come from models trained on small public datasets (about 1,100 "

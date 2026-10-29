@@ -82,7 +82,12 @@ def _apply(args) -> None:
             raise SystemExit(str(err))
         print(f"PubChem {kind} '{value}': {len(records)} structure(s) found")
         smiles_list = [r.smiles for r in records[:args.max]]
-    reports = [analyze(s, bundle, scale_mmol=args.scale).to_markdown() for s in smiles_list]
+    lookup = None
+    if args.check_precursors:
+        from .harvest import PubChemSource
+        lookup = PubChemSource(HttpClient(cache_dir=Path(args.data_dir) / "cache")).cid_for_smiles
+    reports = [analyze(s, bundle, scale_mmol=args.scale, max_steps=args.steps, known_lookup=lookup).to_markdown()
+               for s in smiles_list]
     text = "\n\n---\n\n".join(reports)
     if args.out:
         Path(args.out).write_text(text)
@@ -147,7 +152,7 @@ def _design(args) -> None:
             print(f"  ! not modelled: {line}")
     pipeline = DesignPipeline(MODEL_DIR)
     result = pipeline.design(targets, n_samples=args.n, top_k=top_k,
-                             temperature=args.temperature, seed=args.seed)
+                             temperature=args.temperature, seed=args.seed, max_steps=args.steps)
     print(" -> ".join(f"{k} {v}" for k, v in result.stats.items()))
     if result.table.empty:
         print("no molecules passed the filters; try more samples or a lower temperature")
@@ -164,7 +169,7 @@ def _design(args) -> None:
     for smiles in list(result.table["SMILES"])[:args.recipes]:
         recipe = result.recipes.get(smiles)
         print(f"\n{'=' * 78}\n{smiles}\n{'=' * 78}")
-        print(recipe.to_markdown() if recipe else "No one-step route from the supported reaction classes.")
+        print(recipe.to_markdown() if recipe else "No route from the supported reaction classes within the step limit.")
 
 
 def main() -> None:
@@ -212,7 +217,10 @@ def main() -> None:
     group.add_argument("--formula", help="a molecular formula, e.g. C9H8O4 (looks isomers up on PubChem)")
     group.add_argument("--name", help="a compound name, e.g. ibuprofen (looked up on PubChem)")
     p.add_argument("--max", type=int, default=5, help="most structures to analyse for a formula or name")
-    p.add_argument("--scale", type=float, default=1.0, help="reaction scale in mmol for the recipe")
+    p.add_argument("--scale", type=float, default=1.0, help="final-step scale in mmol for the recipe")
+    p.add_argument("--steps", type=int, default=3, help="most reaction steps to plan (1-6)")
+    p.add_argument("--check-precursors", action="store_true",
+                   help="look the starting materials up on PubChem (needs internet)")
     p.add_argument("--out", help="write the report(s) to this Markdown file")
     p.add_argument("--data-dir", default=str(DATA_DIR))
     p.set_defaults(func=_apply)
@@ -258,6 +266,7 @@ def main() -> None:
     p.add_argument("--seed", type=int, help="make sampling reproducible")
     p.add_argument("--english", help='describe the molecule in words, e.g. "water soluble, easy to make, '
                                      'drug-like, logP around 3" (overrides the numeric options)')
+    p.add_argument("--steps", type=int, default=3, help="most reaction steps to plan per molecule (1-6)")
     p.add_argument("--recipes", type=int, default=0, metavar="N",
                    help="print the synthesis recipe for the top N molecules")
     p.add_argument("--recipes-out", help="write every recipe to this Markdown file")

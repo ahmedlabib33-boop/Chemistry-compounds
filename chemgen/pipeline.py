@@ -9,7 +9,7 @@ import pandas as pd
 import torch
 from rdkit import Chem, DataStructs
 
-from . import chem, safety, synthesis
+from . import chem, multistep, safety, synthesis
 from .generator import Generator
 from .predictor import PropertyPredictor
 
@@ -26,13 +26,13 @@ class DesignTargets:
 class DesignResult:
     table: pd.DataFrame
     stats: dict
-    recipes: dict[str, synthesis.Recipe | None] = field(default_factory=dict)
+    recipes: dict[str, multistep.MultiStepRecipe | None] = field(default_factory=dict)
 
     def recipes_markdown(self) -> str:
         parts = []
         for i, smiles in enumerate(self.table["SMILES"], 1):
             recipe = self.recipes.get(smiles)
-            body = recipe.to_markdown() if recipe else "No one-step route from the supported reaction classes."
+            body = recipe.to_markdown() if recipe else "No route from the supported reaction classes within the step limit."
             parts.append(f"## Molecule {i}: `{smiles}`\n\n{body}")
         return "\n\n---\n\n".join(parts)
 
@@ -57,7 +57,7 @@ class DesignPipeline:
 
     def design(self, targets: DesignTargets, n_samples: int = 2000, top_k: int = 20,
                temperature: float = 1.0, max_similarity: float = 0.7,
-               seed: int | None = None, with_recipes: bool = True) -> DesignResult:
+               seed: int | None = None, with_recipes: bool = True, max_steps: int = 3) -> DesignResult:
         if seed is not None:
             torch.manual_seed(seed)
         raw =self.generator.sample(targets.logp, targets.qed, targets.sas, n=n_samples,
@@ -99,10 +99,10 @@ class DesignPipeline:
 
         table = self._diverse_top(df, mols_by_smiles=dict(zip(smiles_list, mols)),
                                   top_k=top_k, max_similarity=max_similarity)
-        recipes: dict[str, synthesis.Recipe | None] = {}
+        recipes: dict[str, multistep.MultiStepRecipe | None] = {}
         if with_recipes:
             by_smiles = dict(zip(smiles_list, mols))
-            recipes = {s: synthesis.propose_recipe(by_smiles[s]) for s in table["SMILES"]}
+            recipes = {s: multistep.propose_plan(by_smiles[s], max_steps=max_steps) for s in table["SMILES"]}
             table["route"] = [recipes[s].summary if recipes[s] else "no route found"
                               for s in table["SMILES"]]
         return DesignResult(table, stats, recipes)

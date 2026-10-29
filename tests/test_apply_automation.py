@@ -88,7 +88,7 @@ def test_reactive_alert_keeps_predictions_but_withholds_the_recipe(bundle):
 
 
 def test_molecule_without_a_supported_route_says_so(bundle):
-    assert "multi-step" in analyze("CCCCCC", bundle).to_markdown()
+    assert "nine supported reaction classes" in analyze("CCCCCC", bundle).to_markdown()
 
 
 # ---------- registry ----------
