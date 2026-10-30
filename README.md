@@ -263,10 +263,27 @@ phenol/diarylamine for antioxidants, long-chain ester/amide for friction modifie
 size/polarity windows for base-oil- and fuel-range hydrocarbons). A tag means "this structural
 class is traditionally used this way", never a potency score or a guarantee, and tags are not
 mutually exclusive. There is no open, downloadable dataset of measured corrosion-inhibition or
-antiwear activity either, so this is the honest alternative to fabricating one.
+antiwear activity either, so this is the honest alternative to fabricating one. Measured on a
+real run: targeting the antiwear/EP role reliably surfaces organophosphorus esters (the
+generator genuinely learned that chemotype, since OPERA's chemicals include many); targeting
+corrosion-inhibitor or antioxidant roles mostly does not (1 of 2,303 and 0 of 10, respectively,
+in two representative runs) -- those heterocyclic/hindered-phenol motifs are rare in what a
+16k-molecule, 10-epoch generator learned to produce, even though `apply` still recognises them
+correctly on a structure you already have (e.g. benzotriazole, BHT).
 
-**Honest limitations, automotive-specific:** no viscosity or flash-point number; role tags are
-heuristic, not measured; metal-containing additives (ZDDP and other metal dithiophosphates,
+**Synthesis-recipe coverage is much lower here than for drug-like molecules: about 1 in 13
+generated molecules gets a route (measured on an 80-molecule sample), not the drug app's roughly
+85%.** The nine reaction classes were built around amide/ester/urea/sulfonamide-type chemistry;
+automotive-generated molecules are mostly free alcohols, ketones and dialkyl ethers (in that
+sample: alcohol 23, ketone 10, dialkyl ether 9, thioether 6), none of which any of the nine
+classes disconnects. Adding a carbonyl-reduction route (alcohol <- ketone/aldehyde) would be the
+highest-value next addition, but it needs a genuine one-precursor reaction shape that the current
+`Template`/`Route` machinery in `chemgen/synthesis.py` doesn't support (every template assumes a
+two-precursor disconnection) -- extending that is future work, not something to bolt on without
+re-verifying the shared drug-app code it would touch.
+
+**Other honest limitations, automotive-specific:** no viscosity or flash-point number; role tags
+are heuristic, not measured; metal-containing additives (ZDDP and other metal dithiophosphates,
 common real antiwear chemistry) can't be represented, since the generator and safety screen are
 organic-small-molecule only; lubricant base oils and many real formulations are mixtures, which a
 single-molecule generator cannot represent. Safety screening, the hazard patterns, and the
