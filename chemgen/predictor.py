@@ -51,13 +51,13 @@ class PropertyPredictor:
         self.name, self.model = name, model
 
     @classmethod
-    def train(cls, name: str, data_dir: Path, n_estimators: int = 400,
-              seed: int = 0) -> tuple["PropertyPredictor", dict]:
-        spec = DATASETS[name]
+    def train(cls, name: str, data_dir: Path, n_estimators: int = 400, seed: int = 0,
+              specs: dict[str, DatasetSpec] = None) -> tuple["PropertyPredictor", dict]:
+        spec = (specs or DATASETS)[name]
         df = pd.read_csv(Path(data_dir) / spec.filename)
-        mols = [chem.to_mol(s) for s in df[spec.smiles_col]]
-        ok = [m is not None for m in mols]
-        mols = [m for m in mols if m is not None]
+        parsed = [chem.to_mol(s) for s in df[spec.smiles_col]]
+        ok = [m is not None and len(Chem.GetMolFrags(m)) == 1 for m in parsed]
+        mols = [m for m, keep in zip(parsed, ok) if keep]
         y = df.loc[ok, spec.target_col].to_numpy(dtype=np.float64)
         X = np.stack([chem.featurize(m) for m in mols])
 

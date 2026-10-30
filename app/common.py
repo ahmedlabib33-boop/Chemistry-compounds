@@ -25,3 +25,25 @@ def load_pipeline(stamp: float) -> DesignPipeline:
 @st.cache_resource
 def load_bundle(stamp: float) -> ModelBundle:
     return ModelBundle.load(MODEL_DIR, DATA_DIR)
+
+
+def automotive_model_stamp() -> float:
+    from automotive import MODEL_DIR as AUTO_MODEL_DIR
+    path = AUTO_MODEL_DIR / "generator.pt"
+    return path.stat().st_mtime if path.exists() else 0.0
+
+
+@st.cache_resource
+def load_automotive_pipeline(stamp: float):
+    from automotive import DATA_DIR as AUTO_DATA_DIR
+    from automotive import MODEL_DIR as AUTO_MODEL_DIR
+    from automotive.pipeline import AutomotivePipeline
+    return AutomotivePipeline(AUTO_MODEL_DIR, AUTO_DATA_DIR)
+
+
+@st.cache_resource
+def load_automotive_bundle(stamp: float):
+    from automotive import DATA_DIR as AUTO_DATA_DIR
+    from automotive import MODEL_DIR as AUTO_MODEL_DIR
+    from automotive.apply import ModelBundle as AutomotiveModelBundle
+    return AutomotiveModelBundle.load(AUTO_MODEL_DIR, AUTO_DATA_DIR)

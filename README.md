@@ -1,9 +1,13 @@
 # ChemGen
 
-Property-conditioned generation of drug-like molecules, with property prediction, safety
-filtering, ranking and a detailed multi-step synthesis recipe for each result. Describe what you need
-in plain English (or set sliders) and the app proposes novel molecules that meet it. It runs
-entirely locally: no API keys, no paid services.
+Two apps in one repo, sharing an engine. **ChemGen** (`chemgen/`) does property-conditioned
+generation of drug-like molecules. **Automotive chemistry** (`automotive/`, see below) is a
+sibling app for automotive chemicals -- fuel/lubricant additives, corrosion inhibitors,
+base-oil-like hydrocarbons -- with its own data and property models, reusing ChemGen's SMILES
+tokenizer, generator architecture, hazard screens, retrosynthesis planner and harvesting agents.
+Both describe what you need in plain English (or sliders), propose novel molecules that meet it,
+screen them, predict their properties, and write a detailed multi-step synthesis recipe. Both
+run entirely locally: no API keys, no paid services.
 
 ```
 English request  -->  rule-based parser (refuses weapons / toxins / controlled substances)
@@ -201,7 +205,77 @@ PubChem data is public domain; ChEMBL is CC BY-SA 3.0, so attribute it and share
 datasets under the same licence. Harvested molecules are only as good as the databases; the
 generator's own predictions and recipes carry the same caveats as everything else here.
 
+## Automotive chemistry
+
+A second, independent app for a different domain: fuel and lubricant additives, corrosion
+inhibitors, friction modifiers and base-oil-like hydrocarbons, instead of drug-like molecules.
+
+```bash
+python -m automotive status                      # what is installed / downloaded / trained
+python -m automotive prepare                      # download + train everything missing
+python -m automotive prepare --quick              # smaller generator, faster first look
+
+python -m automotive design --english "a nonpolar, base-oil-like hydrocarbon, easy to make, show 10"
+python -m automotive design --role antiwear_ep --logp 5 --tpsa 15 --recipes 3
+python -m automotive apply --smiles "Cc1ccccc1OP(=O)(Oc1ccccc1C)Oc1ccccc1C"   # tricresyl phosphate
+
+streamlit run app/streamlit_app.py                # then open the Automotive page
+```
+
+**Why a separate app, not a mode of ChemGen:** the useful molecule classes, the properties that
+matter, and the training data are all different. Reused unchanged from ChemGen: the SMILES
+tokenizer and generator architecture (conditioned on three different floats here: logP, TPSA,
+synthetic accessibility -- the model doesn't know what they mean, so the same code trains a
+different domain; see `automotive/generator.py`'s docstring), the hazard screen for controlled
+substances and energetic/mustard groups, the English-request refusal screen, and the multi-step
+retrosynthesis planner (the same nine reaction classes; esters and amides cover a fair amount of
+real additive chemistry, e.g. ester-based friction modifiers, fatty amides, corrosion-inhibitor
+amides). New for this domain: a wider element whitelist (adds phosphorus and boron -- ordinary
+chemistry for antiwear/EP additives and borate-ester friction modifiers, not something the
+drug app allows), real ML property predictors trained on different data, and a rule-based
+automotive-role classifier.
+
+**Data: EPA OPERA**, a public-domain, measured-property QSAR dataset (MIT-licensed mirror at
+[github.com/kmansouri/OPERA](https://github.com/kmansouri/OPERA)), not ZINC. ZINC is drug-biased
+(heterocycles, amides, amines); OPERA's industrial/environmental chemical sets are a much closer
+match to automotive chemistry's hydrocarbons, esters and simple aromatics. Four property sets are
+used, each a real, scaffold-split-evaluated model (random forest, same architecture as ChemGen's):
+
+| Property | What it's for | Molecules | Scaffold-split RMSE vs. mean baseline | R² |
+| --- | --- | --- | --- | --- |
+| Boiling point (°C) | fuel volatility / distillation range | 2,425 | 94.9 vs. 140.8 | 0.33 |
+| Vapor pressure (log₁₀ mmHg) | evaporative emissions; tracks flammability | 3,942 | 2.61 vs. 4.09 | 0.36 |
+| Melting point (°C) | cold-flow / pour-point proxy | 13,853 | 65.5 vs. 107.4 | 0.50 |
+| Water solubility (log₁₀ mol/L) | coolant/moisture miscibility, spill fate | 4,671 | 1.33 vs. 2.02 | 0.56 |
+
+(Exact figures from this build's run; see `models/automotive/predictor_metrics.json`.) These R²
+values are real but modest -- OPERA's sets span huge, unrelated chemical diversity rather than one
+focused series, so treat predictions as screening estimates, same as ChemGen's. **Flash point and
+kinematic viscosity are not predicted**: no open, programmatically-downloadable dataset for either
+was found. Rather than invent a flash-point formula from a half-remembered textbook correlation,
+the app reports boiling point and vapor pressure and says, qualitatively, that flash point tracks
+them (lower BP / higher VP -> more flammable).
+
+**Automotive "role" tags are rule-based, not learned.** `automotive/roles.py` matches SMARTS
+patterns for the classic chemotypes of each additive class (benzotriazole/imidazoline/fatty-amine
+for corrosion inhibitors, organophosphate/disulfide/borate for antiwear-EP, hindered
+phenol/diarylamine for antioxidants, long-chain ester/amide for friction modifiers, and
+size/polarity windows for base-oil- and fuel-range hydrocarbons). A tag means "this structural
+class is traditionally used this way", never a potency score or a guarantee, and tags are not
+mutually exclusive. There is no open, downloadable dataset of measured corrosion-inhibition or
+antiwear activity either, so this is the honest alternative to fabricating one.
+
+**Honest limitations, automotive-specific:** no viscosity or flash-point number; role tags are
+heuristic, not measured; metal-containing additives (ZDDP and other metal dithiophosphates,
+common real antiwear chemistry) can't be represented, since the generator and safety screen are
+organic-small-molecule only; lubricant base oils and many real formulations are mixtures, which a
+single-molecule generator cannot represent. Safety screening, the hazard patterns, and the
+request-level refusal for weapons/toxins/explosives/controlled substances are unchanged from
+ChemGen and apply here too.
+
 ## Components
+
+### ChemGen (drug-like molecules)
 
 | Module | Role |
 | --- | --- |
@@ -210,15 +284,31 @@ generator's own predictions and recipes carry the same caveats as everything els
 | `chemgen/safety.py` | Hard filters on every generated molecule. See below. |
 | `chemgen/pipeline.py` | The sampling, filtering, scoring and ranking loop. |
 | `chemgen/nlu.py` | English request parser. |
-| `chemgen/guard.py` | The request-level refusal screen shared by the English parser and the web agents. |
+| `chemgen/guard.py` | The request-level refusal screen shared by the English parser and the web agents (and by automotive/nlu.py). |
 | `chemgen/apply.py` | Screens a user-supplied structure, predicts its properties with an applicability check, and attaches the recipe. |
 | `chemgen/automation.py` | The harvest -> retrain -> benchmark -> promote loop, the versioned model registry and rollback. |
 | `chemgen/prepare.py` | `status` readiness checks and the idempotent `prepare` command. |
 | `chemgen/harvest.py` | Data-harvesting agents: PubChem and ChEMBL sources, curator, store, coordinator, `lookup`. |
-| `chemgen/synthesis.py` | Template retrosynthesis, route ranking and recipe writer. |
+| `chemgen/synthesis.py` | Template retrosynthesis, route ranking and recipe writer (shared with automotive). |
+| `chemgen/multistep.py` | Multi-step route planner built on `synthesis.py` (shared with automotive). |
 | `app/streamlit_app.py` | Design page: English or slider input, molecule grid, metrics, table, per-molecule recipes, downloads. |
 | `app/pages/1_Apply_a_formula.py` | Analyse a SMILES, formula or name: predictions, applicability, recipe. |
 | `app/pages/2_Automation.py` | Readiness checklist, live model, run history, start a cycle, cron line. |
+
+### Automotive chemistry
+
+| Module | Role |
+| --- | --- |
+| `automotive/data.py` | Downloads the OPERA property CSVs. |
+| `automotive/predictor.py` | Registers the BP/VP/MP/WS datasets with chemgen's `PropertyPredictor`. |
+| `automotive/safety.py` | Automotive element whitelist and MW window; reuses chemgen's hazard screen and NIH alerts. |
+| `automotive/roles.py` | The rule-based additive-role SMARTS classifier. |
+| `automotive/generator.py` | Builds the generator's training CSV from the OPERA molecule pool; trains it via chemgen's `train_generator`, unchanged. |
+| `automotive/pipeline.py` | The sampling, filtering, scoring, role-tagging and ranking loop. |
+| `automotive/nlu.py` | English request parser for this domain. |
+| `automotive/apply.py` | Screens a user-supplied structure, predicts BP/VP/MP/WS, tags roles, attaches the recipe. |
+| `automotive/prepare.py` | `status` / `prepare` for this domain. |
+| `app/pages/3_Automotive.py` | Design and Apply-a-formula tabs for this domain. |
 
 ## Safety filters
 
